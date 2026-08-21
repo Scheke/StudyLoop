@@ -1,0 +1,124 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && request.auth.token.admin == true; }
+    function validText(field, max) { return field is string && field.size() <= max; }
+
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn() && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','createdAt','updatedAt'])
+        && validText(request.resource.data.username, 80)
+        && validText(request.resource.data.email, 254)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.yearLevel, 40)
+        && validText(request.resource.data.bio, 500)
+        && validText(request.resource.data.photoURL, 2048);
+      allow update: if signedIn() && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','createdAt','updatedAt'])
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validText(request.resource.data.username, 80)
+        && validText(request.resource.data.email, 254)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.yearLevel, 40)
+        && validText(request.resource.data.bio, 500)
+        && validText(request.resource.data.photoURL, 2048);
+      allow delete: if false;
+    }
+
+    match /publicProfiles/{userId} {
+      allow read: if true;
+      allow create, update: if signedIn() && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['username','course','yearLevel','bio','photoURL','updatedAt'])
+        && validText(request.resource.data.username, 80)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.yearLevel, 40)
+        && validText(request.resource.data.bio, 500)
+        && validText(request.resource.data.photoURL, 2048);
+      allow delete: if false;
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['id','authorId','author','authorPhotoURL','ago','course','icon','text','comments','imageURL','audioURL','file','createdAt'])
+        && request.resource.data.author == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username
+        && validText(request.resource.data.author, 80)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.text, 4000)
+        && request.resource.data.comments == 0
+        && request.resource.data.id is string;
+      allow update: if signedIn() && resource.data.authorId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['id','authorId','author','authorPhotoURL','ago','course','icon','text','comments','imageURL','audioURL','file','createdAt'])
+        && request.resource.data.authorId == resource.data.authorId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validText(request.resource.data.author, 80)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.text, 4000);
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    match /channels/{channelId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt'])
+        && validText(request.resource.data.name, 80)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.sub, 120)
+        && validText(request.resource.data.desc, 500)
+        && request.resource.data.access in ['Public','Private'];
+      allow update: if signedIn() && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt'])
+        && validText(request.resource.data.name, 80)
+        && validText(request.resource.data.course, 120)
+        && validText(request.resource.data.sub, 120)
+        && validText(request.resource.data.desc, 500)
+        && request.resource.data.access in ['Public','Private'];
+      allow delete: if false;
+    }
+
+    match /memberships/{membershipId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid','channelId','joinedAt'])
+        && exists(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
+        && get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.access == 'Public';
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if false;
+    }
+
+    match /users/{userId}/saved/{postId} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /messages/{messageId} {
+      allow create: if signedIn() && request.auth.uid == request.resource.data.senderId
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','createdAt'])
+        && request.resource.data.participants.size() <= 2
+        && validText(request.resource.data.conversationId, 160)
+        && validText(request.resource.data.text, 4000);
+      allow read: if signedIn() && request.auth.uid in resource.data.participants;
+      allow update, delete: if false;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['type','targetId','reason','userId','createdAt'])
+        && request.resource.data.userId == request.auth.uid
+        && validText(request.resource.data.type, 30)
+        && validText(request.resource.data.targetId, 200)
+        && validText(request.resource.data.reason, 500);
+      allow read, update, delete: if admin();
+    }
+
+    match /admin/{document=**} {
+      allow read, write: if admin();
+    }
+  }
+}
