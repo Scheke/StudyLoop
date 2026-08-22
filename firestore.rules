@@ -5,6 +5,7 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function admin() { return signedIn() && request.auth.token.admin == true; }
     function validText(field, max) { return field is string && field.size() <= max; }
+    function ownsUser(userId) { return signedIn() && request.auth.uid == userId; }
 
     match /users/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
@@ -93,7 +94,12 @@ service cloud.firestore {
     }
 
     match /users/{userId}/saved/{postId} {
-      allow read, write: if signedIn() && request.auth.uid == userId;
+      allow read: if ownsUser(userId);
+      allow create: if ownsUser(userId)
+        && request.resource.data.keys().hasOnly(['postId','savedAt'])
+        && request.resource.data.postId == postId;
+      allow delete: if ownsUser(userId);
+      allow update: if false;
     }
 
     match /messages/{messageId} {
@@ -102,7 +108,8 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','createdAt'])
         && request.resource.data.participants.size() <= 2
         && validText(request.resource.data.conversationId, 160)
-        && validText(request.resource.data.text, 4000);
+        && validText(request.resource.data.text, 4000)
+        && request.resource.data.type in ['text','forwardedPost'];
       allow read: if signedIn() && request.auth.uid in resource.data.participants;
       allow update, delete: if false;
     }
