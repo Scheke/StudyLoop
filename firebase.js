@@ -28,13 +28,15 @@ async function getServices() {
 export async function signUp(username, email, password) {
   const s = await getServices();
   const result = await s.authApi.createUserWithEmailAndPassword(s.auth, email, password);
-  const profile={ username, course:'', yearLevel:'', bio:'', photoURL:'' };
+  const profile={ username, course:'', yearLevel:'', bio:'', photoURL:'', deactivated:false };
   await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', result.user.uid), { ...profile, email, createdAt: s.firestoreApi.serverTimestamp(), updatedAt: s.firestoreApi.serverTimestamp() });
-  await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { ...profile, updatedAt: s.firestoreApi.serverTimestamp() });
+  await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { username, course:'', yearLevel:'', bio:'', photoURL:'', updatedAt: s.firestoreApi.serverTimestamp() });
   return result.user;
 }
 export async function signIn(email, password) { const s = await getServices(); return (await s.authApi.signInWithEmailAndPassword(s.auth, email, password)).user; }
 export async function signOutUser() { const s = await getServices(); return s.authApi.signOut(s.auth); }
+export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
+export async function deactivateUser(uid) { const s = await getServices(); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { deactivated: true, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
 export async function updateUserProfile(uid, profile) { const s = await getServices(); const publicProfile={ username:profile.username, course:profile.course, yearLevel:profile.yearLevel, bio:profile.bio, photoURL:profile.photoURL }; await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function observeAuth(callback) { const s = await getServices(); return s.authApi.onAuthStateChanged(s.auth, callback); }

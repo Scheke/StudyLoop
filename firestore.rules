@@ -10,15 +10,16 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
       allow create: if signedIn() && request.auth.uid == userId
-        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','createdAt','updatedAt'])
+        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','deactivated','createdAt','updatedAt'])
         && validText(request.resource.data.username, 80)
         && validText(request.resource.data.email, 254)
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.yearLevel, 40)
         && validText(request.resource.data.bio, 500)
-        && validText(request.resource.data.photoURL, 2048);
+        && validText(request.resource.data.photoURL, 2048)
+        && request.resource.data.deactivated == false;
       allow update: if signedIn() && request.auth.uid == userId
-        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','createdAt','updatedAt'])
+        && request.resource.data.keys().hasOnly(['username','email','course','yearLevel','bio','photoURL','deactivated','createdAt','updatedAt'])
         && request.resource.data.email == resource.data.email
         && request.resource.data.createdAt == resource.data.createdAt
         && validText(request.resource.data.username, 80)
@@ -26,7 +27,8 @@ service cloud.firestore {
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.yearLevel, 40)
         && validText(request.resource.data.bio, 500)
-        && validText(request.resource.data.photoURL, 2048);
+        && validText(request.resource.data.photoURL, 2048)
+        && request.resource.data.deactivated is bool;
       allow delete: if false;
     }
 

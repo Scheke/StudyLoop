@@ -43,6 +43,9 @@ button { color: inherit; }
 .landing-secondary { border:1px solid #cbdce6;background:rgba(255,255,255,.75);color:#38546a; }
 .powered-line { display:flex;align-items:center;gap:8px;margin-top:32px;color:#7c8e9d;font-size:12px;text-transform:uppercase;letter-spacing:1.3px; }
 .powered-line strong { color:#36576c; }
+.powered-line a,.inline-link { color:var(--tg-blue); text-decoration:underline; cursor:pointer; }
+.inline-link { border:0; background:none; padding:0; font:inherit; }
+.legal-page { max-width:760px; margin:0 auto; }
 .landing-visual { min-height:620px;display:grid;place-items:center;position:relative; }
 .orbit { position:absolute;border:1px solid rgba(34,158,217,.15);border-radius:50%; }
 .orbit-one { width:510px;height:510px; }
