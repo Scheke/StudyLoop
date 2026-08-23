@@ -27,8 +27,7 @@ service cloud.firestore {
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.yearLevel, 40)
         && validText(request.resource.data.bio, 500)
-        && validText(request.resource.data.photoURL, 2048)
-        && request.resource.data.deactivated is bool;
+        && validText(request.resource.data.photoURL, 2048);
       allow delete: if false;
     }
 
@@ -49,7 +48,6 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','file','createdAt'])
         && request.resource.data.channelId is string
-        && exists(/databases/$(database)/documents/memberships/$(request.auth.uid + "_" + request.resource.data.channelId))
         && request.resource.data.author == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username
         && validText(request.resource.data.author, 80)
         && validText(request.resource.data.course, 120)
@@ -60,7 +58,6 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['id','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','file','createdAt'])
         && request.resource.data.authorId == resource.data.authorId
         && request.resource.data.channelId == resource.data.channelId
-        && exists(/databases/$(database)/documents/memberships/$(request.auth.uid + "_" + resource.data.channelId))
         && request.resource.data.id == resource.data.id
         && request.resource.data.createdAt == resource.data.createdAt
         && validText(request.resource.data.author, 80)
@@ -114,7 +111,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','createdAt'])
         && request.resource.data.participants.size() <= 2
         && validText(request.resource.data.conversationId, 160)
-        && validText(request.resource.data.text, 4000)
+        && (request.resource.data.text == null || validText(request.resource.data.text, 4000))
         && request.resource.data.type in ['text','forwardedPost'];
       allow read: if signedIn() && request.auth.uid in resource.data.participants;
       allow update, delete: if false;
