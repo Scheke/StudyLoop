@@ -33,7 +33,7 @@ export async function signUp(username, email, password) {
   await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { username, course:'', yearLevel:'', bio:'', photoURL:'', updatedAt: s.firestoreApi.serverTimestamp() });
   return result.user;
 }
-export async function signIn(email, password) { const s = await getServices(); return (await s.authApi.signInWithEmailAndPassword(s.auth, email, password)).user; }
+export async function signIn(email, password) { const s = await getServices(); return (await s.authApi.signInWithEmailAndPassword(s.auth, String(email||'').trim().toLowerCase(), password)).user; }
 export async function signOutUser() { const s = await getServices(); return s.authApi.signOut(s.auth); }
 export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
 export async function deactivateUser(uid) { const s = await getServices(); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { deactivated: true, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }

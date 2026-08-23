@@ -138,6 +138,10 @@ button { color: inherit; }
 .dot-icon { width:25px;height:25px;border-radius:8px;display:grid;place-items:center;color:white;background:var(--tg-blue);font-weight:700;font-size:12px; }
 .post-text { margin:15px 0; line-height:1.55; }
 .post-image { display:block;width:100%;max-width:640px;height:280px;object-fit:contain;border-radius:13px;margin:12px auto; }
+.post-image { cursor:zoom-in; }
+.post-author { border:0; background:none; padding:0; font:inherit; font-weight:700; color:inherit; cursor:pointer; text-align:left; }
+.image-lightbox { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:28px; background:rgba(0,0,0,.78); cursor:zoom-out; }
+.image-lightbox img { max-width:96vw; max-height:92vh; object-fit:contain; border-radius:12px; }
 .post-audio { width:100%;margin:12px 0; }
 .file-card { display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);background:#fbfdff;border-radius:13px; }
 .file-icon { width:42px;height:48px;border-radius:8px;display:grid;place-items:center;color:white;background:linear-gradient(145deg,#ff6c64,#df3434);font-size:12px;font-weight:700; }
@@ -199,7 +203,7 @@ button { color: inherit; }
 .channel-copy p { margin:10px 0 0;color:#526477;font-size:14px; }
 .channel-tags { display:flex;gap:7px;margin-top:7px;color:var(--muted);font-size:13px; }
 .channel-tags .public { color:var(--green); }
-.messages-layout { height:calc(100vh - 112px);min-height:590px;display:grid;grid-template-columns:340px 1fr;background:white;border:1px solid var(--line);border-radius:20px;overflow:hidden;box-shadow:var(--shadow); }
+.messages-layout { height:calc(100vh - 130px);min-height:520px;display:grid;grid-template-columns:340px 1fr;background:white;border:1px solid var(--line);border-radius:20px;overflow:hidden;box-shadow:var(--shadow); }
 .conversation-list { border-right:1px solid var(--line);overflow:auto; }
 .conversation-search { padding:16px;position:sticky;top:0;background:white;z-index:2; }
 .conversation { display:flex;gap:11px;padding:14px 16px;cursor:pointer;border-left:3px solid transparent; }
