@@ -329,7 +329,7 @@ function homePage() {
 }
 
 function channelsPage() {
-  const list=channels.filter((c,i)=>(state.channelMode==='discover'||state.joined.has(i))&&c.name.toLowerCase().includes(state.channelSearch.toLowerCase()));
+  const list=channels.filter((c,i)=>(state.channelMode==='discover'||state.joined.has(i)||c.ownerId===state.userId)&&c.name.toLowerCase().includes(state.channelSearch.toLowerCase()));
   return shell(`<div class="stack">
     <div style="display:flex;gap:12px"><div class="segment" style="flex:1"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="icon-btn" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div>
     <label class="search-box">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${state.channelSearch}" /></label>
@@ -671,7 +671,7 @@ document.addEventListener('click',e=>{
 });
 
 let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments;
-function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
+function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>(state.memberChannelIds.has(channel.id)||channel.ownerId===state.userId)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
   stopActiveMessages?.();
   const conversationId=conversationIdFor();
