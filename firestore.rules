@@ -98,6 +98,17 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /posts/{postId}/comments/{commentId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['authorId','author','authorPhotoURL','text','imageURL','audioURL','parentId','createdAt'])
+        && validText(request.resource.data.author, 80)
+        && validText(request.resource.data.text, 2000);
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow update: if false;
+    }
+
     match /memberships/{membershipId} {
       allow read: if signedIn() && resource.data.uid == request.auth.uid;
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid
@@ -126,11 +137,10 @@ service cloud.firestore {
         && (request.resource.data.text == null || validText(request.resource.data.text, 4000))
         && request.resource.data.type in ['text','postLink','savedPost','attachment'];
       allow read: if signedIn() && request.auth.uid in resource.data.participants;
-      allow delete: if signedIn()
-        && resource.data.senderId == request.auth.uid
-        && resource.data.participants.size() == 1
-        && resource.data.participants[0] == request.auth.uid;
-      allow update: if false;
+      allow delete: if signedIn() && resource.data.senderId == request.auth.uid;
+      allow update: if signedIn() && resource.data.senderId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text','editedAt'])
+        && validText(request.resource.data.text, 4000);
     }
 
     match /reports/{reportId} {
