@@ -1,0 +1,14 @@
+{
+  "name": "StudyLoop",
+  "short_name": "StudyLoop",
+  "description": "Course channels, shared notes, private messages, and study communities.",
+  "start_url": "https://study-loop-one.vercel.app/",
+  "scope": "https://study-loop-one.vercel.app/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f3f7fa",
+  "theme_color": "#229ed9",
+  "icons": [
+    { "src": "/studyloop-logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

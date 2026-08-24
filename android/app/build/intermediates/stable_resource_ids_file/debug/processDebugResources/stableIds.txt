@@ -1,0 +1,2 @@
+com.scheke.studyloop:style/AppTheme = 0x7f020000
+com.scheke.studyloop:mipmap/ic_launcher = 0x7f010000

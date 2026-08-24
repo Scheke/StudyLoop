@@ -555,6 +555,8 @@ document.addEventListener('click',e=>{
   const editMessage=e.target.closest('[data-edit-message]');
   if(editMessage){const current=editMessage.closest('.bubble')?.childNodes?.[0]?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
   const action=e.target.closest('[data-action]'); if(!action)return;
+  if(action.dataset.action==='dismiss-apk'){localStorage.setItem('studyloop_apk_prompt_dismissed','1');action.closest('[data-apk-prompt]')?.remove();return;}
+  if(action.dataset.action==='download-apk'){localStorage.setItem('studyloop_apk_prompt_dismissed','1');return;}
   const post=action.closest('[data-post]');
   if(action.dataset.action==='zoom-image'){document.body.insertAdjacentHTML('beforeend',`<div class="image-lightbox" data-action="close-modal"><img src="${action.src}" alt="Expanded attachment" /></div>`);return;}
   if(action.dataset.action==='more'&&post){const item=posts.find(p=>String(p.id)===String(post.dataset.post));const own=item&&item.authorId===state.userId;const downloadable=Boolean(safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop post-menu-backdrop" data-action="close-modal" data-post-id="${post.dataset.post}"><div class="post-menu">${downloadable?`<button class="secondary" data-action="download-post">${icon('download')} Download</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-post">Delete post</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
@@ -678,6 +680,11 @@ async function subscribeActiveMessages() {
   if(!conversationId)return;
   try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Now';const mapped=messages.map(message=>{const side=message.senderId===state.userId?'mine':'theirs';if(message.type==='postLink')return{id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId};if(message.type==='savedPost'||message.type==='forwardedPost')return{id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post};if(message.type==='attachment')return{id:message.id,type:'attachment',side,time:timeOf(message),file:message.file};return[side,message.text||'',timeOf(message),message.id];});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
 }
+
+function showApkPrompt() {
+  if(localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Get the StudyLoop Android app for a faster mobile experience.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><a class="primary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div></div>`);
+}
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{discussionComments[state.activePost]=comments.map(comment=>({id:comment.id,parentId:comment.parentId||null,authorId:comment.authorId||'',initials:initials(comment.author),name:comment.author,authorPhotoURL:comment.authorPhotoURL||'',ago:comment.createdAt?.toDate?relativeTime(comment.createdAt):'now',text:comment.text||'',imageURL:comment.imageURL||'',audioURL:comment.audioURL||''}));if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {
   try {
@@ -703,3 +710,7 @@ async function connectFirebase() {
 
 render();
 connectFirebase();
+setTimeout(showApkPrompt, 1200);
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
