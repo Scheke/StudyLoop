@@ -222,6 +222,14 @@ button { color: inherit; }
 .bubble.mine { align-self:flex-end;background:#dff2fc;border-bottom-right-radius:4px; }
 .bubble.theirs { align-self:flex-start;border-bottom-left-radius:4px; }
 .bubble-time { display:block;text-align:right;color:var(--muted);font-size:11px;margin-top:4px; }
+.bubble-footer { display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;margin-top:4px; }
+.bubble-footer .bubble-time { margin-top:0; }
+.message-delete { border:0;background:transparent;color:#d94b4b;font:inherit;font-size:11px;padding:0;cursor:pointer; }
+.forwarded-file { color:inherit;text-decoration:none; }
+.message-share { border:0;background:transparent;color:var(--tg-blue);font:inherit;font-size:11px;padding:0;cursor:pointer; }
+.post-link-card { width:100%;display:flex;align-items:center;gap:8px;border:1px solid #b8dff2;background:#fff;color:var(--tg-blue-dark);border-radius:10px;padding:11px 12px;font:inherit;font-weight:700;cursor:pointer; }
+.post-link-card .icon { width:16px;height:16px; }
+.saved-post-image { display:block;width:100%;max-height:320px;object-fit:contain;border-radius:10px;margin-top:10px;background:#eef4f7;cursor:zoom-in; }
 .chat-compose { display:flex;gap:8px;padding:12px;background:white;border-top:1px solid var(--line); }
 .chat-compose input { flex:1;border:1px solid var(--line);border-radius:22px;padding:10px 15px;outline:0; }
 .send-btn { border:0;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:white;background:var(--tg-blue);cursor:pointer; }
