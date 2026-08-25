@@ -1,3 +1,8 @@
+import { initializeApp } from 'firebase/app';
+import * as authApi from 'firebase/auth';
+import * as firestoreApi from 'firebase/firestore';
+import * as storageApi from 'firebase/storage';
+
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -11,13 +16,6 @@ const config = {
 let services;
 async function getServices() {
   if (services) return services;
-  const v = '12.11.0';
-  const [{ initializeApp }, authApi, firestoreApi, storageApi] = await Promise.all([
-    import(/* @vite-ignore */ `https://www.gstatic.com/firebasejs/${v}/firebase-app.js`),
-    import(/* @vite-ignore */ `https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`),
-    import(/* @vite-ignore */ `https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`),
-    import(/* @vite-ignore */ `https://www.gstatic.com/firebasejs/${v}/firebase-storage.js`),
-  ]);
   const app = initializeApp(config);
   const auth = authApi.getAuth(app);
   await authApi.setPersistence(auth, authApi.browserLocalPersistence);
@@ -27,17 +25,25 @@ async function getServices() {
 
 export async function signUp(username, email, password) {
   const s = await getServices();
-  const result = await s.authApi.createUserWithEmailAndPassword(s.auth, email, password);
+  const normalizedEmail=String(email||'').trim().toLowerCase();
+  const cleanUsername=String(username||'').trim();
+  const result = await s.authApi.createUserWithEmailAndPassword(s.auth, normalizedEmail, password);
   const profile={ username, course:'', yearLevel:'', bio:'', photoURL:'', deactivated:false };
-  await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', result.user.uid), { ...profile, email, createdAt: s.firestoreApi.serverTimestamp(), updatedAt: s.firestoreApi.serverTimestamp() });
-  await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { username, course:'', yearLevel:'', bio:'', photoURL:'', updatedAt: s.firestoreApi.serverTimestamp() });
-  return result.user;
+  try {
+    await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', result.user.uid), { ...profile, username:cleanUsername, email:normalizedEmail, termsVersion:'2026-08', acceptedTermsAt:s.firestoreApi.serverTimestamp(), createdAt:s.firestoreApi.serverTimestamp(), updatedAt:s.firestoreApi.serverTimestamp() });
+    await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { username:cleanUsername, course:'', yearLevel:'', bio:'', photoURL:'', updatedAt:s.firestoreApi.serverTimestamp() });
+    return result.user;
+  } catch (error) {
+    await s.authApi.deleteUser(result.user).catch(() => {});
+    throw error;
+  }
 }
-export async function signIn(email, password) { const s = await getServices(); return (await s.authApi.signInWithEmailAndPassword(s.auth, String(email||'').trim().toLowerCase(), password)).user; }
+export async function signIn(email, password) { const s = await getServices(); const user=(await s.authApi.signInWithEmailAndPassword(s.auth, String(email||'').trim().toLowerCase(), password)).user;const profile=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'users',user.uid));if(profile.exists()&&profile.data().deactivated===true){await s.authApi.signOut(s.auth);const error=new Error('Account deactivated');error.code='account/deactivated';throw error;}return user; }
 export async function signOutUser() { const s = await getServices(); return s.authApi.signOut(s.auth); }
 export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
 export async function deactivateUser(uid) { const s = await getServices(); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { deactivated: true, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
+export async function getAccountEntitlement(uid) { const s=await getServices();const [snapshot,token]=await Promise.all([s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'entitlements',uid)),s.auth.currentUser?.getIdTokenResult()]);const fromClaim=token?.claims?.plan;const fromDocument=snapshot.exists()?snapshot.data().plan:null;return ['Free','Student+','Power'].includes(fromClaim)?fromClaim:['Free','Student+','Power'].includes(fromDocument)?fromDocument:'Free'; }
 export async function updateUserProfile(uid, profile) { const s = await getServices(); const publicProfile={ username:profile.username, course:profile.course, yearLevel:profile.yearLevel, bio:profile.bio, photoURL:profile.photoURL }; await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function observeAuth(callback) { const s = await getServices(); return s.authApi.onAuthStateChanged(s.auth, callback); }
 export async function observePosts(onChange, onError) { const s = await getServices(); const query = s.firestoreApi.query(s.firestoreApi.collection(s.db, 'posts'), s.firestoreApi.orderBy('createdAt', 'desc')); return s.firestoreApi.onSnapshot(query, snapshot => onChange(snapshot.docs.map(doc => ({ id:doc.id, ...doc.data() }))), onError); }
@@ -48,11 +54,17 @@ export async function observeMemberships(uid, onChange, onError) { const s = awa
 export async function setMembership(uid, channelId, joined) { const s = await getServices(); const ref=s.firestoreApi.doc(s.db, 'memberships', `${uid}_${channelId}`); return joined ? s.firestoreApi.setDoc(ref,{uid,channelId,joinedAt:s.firestoreApi.serverTimestamp()}) : s.firestoreApi.deleteDoc(ref); }
 export async function observeSaved(uid, onChange, onError) { const s = await getServices(); return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db, 'users', uid, 'saved'), snapshot => onChange(snapshot.docs.map(doc => doc.id)), onError); }
 export async function setSavedPost(uid, postId, saved) { const s = await getServices(); const ref=s.firestoreApi.doc(s.db, 'users', uid, 'saved', String(postId)); return saved ? s.firestoreApi.setDoc(ref,{postId:String(postId),savedAt:s.firestoreApi.serverTimestamp()}) : s.firestoreApi.deleteDoc(ref); }
-export async function saveCloudMessage(message) { const s = await getServices(); return s.firestoreApi.addDoc(s.firestoreApi.collection(s.db, 'messages'), { ...message, createdAt:s.firestoreApi.serverTimestamp() }); }
+export async function saveCloudMessage(message) { const s = await getServices(); return s.firestoreApi.addDoc(s.firestoreApi.collection(s.db, 'messages'), { ...message, seenBy:[message.senderId], createdAt:s.firestoreApi.serverTimestamp() }); }
 export async function deleteCloudMessage(messageId) { const s = await getServices(); return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db, 'messages', String(messageId))); }
 export async function updateCloudMessage(messageId, text) { const s = await getServices(); return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'messages',String(messageId)),{text,editedAt:s.firestoreApi.serverTimestamp()}); }
 export async function observeMessages(conversationId, onChange, onError) { const s = await getServices(); const query=s.firestoreApi.query(s.firestoreApi.collection(s.db, 'messages'), s.firestoreApi.where('conversationId','==',conversationId)); return s.firestoreApi.onSnapshot(query, snapshot => onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))), onError); }
 export async function observeUserMessages(userId, onChange, onError) { const s = await getServices(); const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'messages'),s.firestoreApi.where('participants','array-contains',userId));return s.firestoreApi.onSnapshot(query,snapshot=>onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))),onError); }
+export async function markMessagesSeen(messages, userId) { const s=await getServices();const targets=messages.filter(message=>message.senderId!==userId&&!(message.seenBy||[]).includes(userId));if(!targets.length)return;const batch=s.firestoreApi.writeBatch(s.db);for(const message of targets)batch.update(s.firestoreApi.doc(s.db,'messages',String(message.id)),{seenBy:s.firestoreApi.arrayUnion(userId),seenAt:s.firestoreApi.serverTimestamp()});return batch.commit(); }
+export async function observeFriendRequests(userId,onChange,onError) { const s=await getServices();let sent=[];let received=[];const emit=()=>onChange([...received,...sent].filter((item,index,all)=>all.findIndex(other=>other.id===item.id)===index));const sentQuery=s.firestoreApi.query(s.firestoreApi.collection(s.db,'friendRequests'),s.firestoreApi.where('senderId','==',userId));const receivedQuery=s.firestoreApi.query(s.firestoreApi.collection(s.db,'friendRequests'),s.firestoreApi.where('receiverId','==',userId));const stopSent=s.firestoreApi.onSnapshot(sentQuery,snapshot=>{sent=snapshot.docs.map(doc=>({id:doc.id,...doc.data()}));emit();},onError);const stopReceived=s.firestoreApi.onSnapshot(receivedQuery,snapshot=>{received=snapshot.docs.map(doc=>({id:doc.id,...doc.data()}));emit();},onError);return()=>{stopSent();stopReceived();}; }
+export async function sendFriendRequest(senderId,receiverId) { const s=await getServices();const id=`${senderId}_${receiverId}`;return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db,'friendRequests',id),{senderId,receiverId,status:'pending',createdAt:s.firestoreApi.serverTimestamp(),updatedAt:s.firestoreApi.serverTimestamp()}); }
+export async function respondToFriendRequest(requestId,status) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'friendRequests',requestId),{status,updatedAt:s.firestoreApi.serverTimestamp()}); }
+export async function observeBlocks(userId,onChange,onError) { const s=await getServices();const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'blocks'),s.firestoreApi.where('blockerId','==',userId));return s.firestoreApi.onSnapshot(query,snapshot=>onChange(snapshot.docs.map(doc=>doc.data().blockedId)),onError); }
+export async function setUserBlocked(blockerId,blockedId,blocked) { const s=await getServices();const ref=s.firestoreApi.doc(s.db,'blocks',`${blockerId}_${blockedId}`);return blocked?s.firestoreApi.setDoc(ref,{blockerId,blockedId,createdAt:s.firestoreApi.serverTimestamp()}):s.firestoreApi.deleteDoc(ref); }
 export async function saveCloudComment(postId, comment) { const s=await getServices();return s.firestoreApi.addDoc(s.firestoreApi.collection(s.db,'posts',String(postId),'comments'),{...comment,createdAt:s.firestoreApi.serverTimestamp()}); }
 export async function deleteCloudComment(postId, commentId) { const s=await getServices();return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db,'posts',String(postId),'comments',String(commentId))); }
 export async function observeCloudComments(postId,onChange,onError) { const s=await getServices();return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db,'posts',String(postId),'comments'),snapshot=>onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))),onError); }

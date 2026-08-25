@@ -1,4 +1,5 @@
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, updateUserProfile, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
+import './styles.css';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -41,6 +42,7 @@ const state = {
   acceptedRequests: new Set(),
   messageRequests: [],
   blockedUsers: new Set(),
+  relations: [],
   readNotifications: new Set(),
   unreadMessageIds: new Set(),
   profileUser: null,
@@ -54,78 +56,15 @@ const state = {
   replyToCommentId: null,
 };
 
-const channels = [
-  { icon:'</>', cls:'', name:'CS301 Algorithms', sub:'Algorithms & Data Structures', access:'Public', members:248, desc:'Discuss lectures, assignments, and algorithmic problem solving together.' },
-  { icon:'DB', cls:'green', name:'Database Systems', sub:'Relational Databases', access:'Private', members:96, desc:'Share notes, discuss queries, and prepare for exams together.' },
-  { icon:'Ï€', cls:'purple', name:'Discrete Mathematics', sub:'Mathematical Foundations', access:'Public', members:180, desc:'Proofs, logic, sets, and more. Ask questions and grow together.' },
-  { icon:'>_', cls:'orange', name:'Operating Systems', sub:'Systems Programming', access:'Public', members:132, desc:'Discuss concepts, labs, and real-world OS challenges.' },
-  { icon:'NW', cls:'orange', name:'Computer Networks', sub:'Protocols, routing & networking', access:'Public', members:154, desc:'Build a stronger understanding of modern networks.' },
-];
-
-const posts = [
-  { id:0, initials:'AS', author:'Arjun Sharma', ago:'2h', course:'CS301 Algorithms', icon:'</>', text:'In Dijkstra’s algorithm, why do we mark a vertex as “visited” when it’s popped from the priority queue? Could we mark it when we push it instead?', comments:12 },
-  { id:1, initials:'MI', avatar:'green', author:'Meera Iyer', ago:'4h', course:'Database Systems', icon:'DB', text:'Here’s a quick cheatsheet for SQL joins and constraints. Hope this helps!', comments:8, file:{name:'Database-Cheatsheet.pdf',meta:'842 KB • 2 pages'} },
-  { id:2, initials:'RV', avatar:'purple', author:'Rahul Verma', ago:'6h', course:'Discrete Mathematics', icon:'Ï€', text:'Quick explanation of Proof by Contradiction with examples.', comments:15, audio:true },
-  { id:3, initials:'AR', avatar:'green', author:'Ananya Rao', ago:'9h', course:'CS301 Algorithms', icon:'</>', text:'Sharing my handwritten notes on Dynamic Programming — knapsack problems.', comments:9, note:true },
-];
-
-const people = [
-  {initials:'AM',name:'Alex Mensah',info:'Computer Science • 3rd Year',status:'Online'},
-  {initials:'MI',name:'Meera Iyer',info:'DBMS • 2nd Year',status:'Dijkstra University'},
-  {initials:'RV',name:'Rahul Verma',info:'Discrete Math • 2nd Year',status:'Dijkstra University'},
-  {initials:'AR',name:'Ananya Rao',info:'Algorithms • 3rd Year',status:'Dijkstra University'},
-];
-
-const friendRequests = [
-  { initials:'KG', name:'Karan Gupta', info:'Computer Science · 2nd Year', status:'Dijkstra University' },
-  { initials:'NS', name:'Neha Singh', info:'Mathematics · 2nd Year', status:'Dijkstra University' },
-];
-
-const discoverPeople = [
-  { initials:'VP', name:'Vikram Patel', info:'Computer Science · 1st Year', status:'Dijkstra University' },
-  { initials:'IN', name:'Ishita Nair', info:'DBMS · 2nd Year', status:'Dijkstra University' },
-  { initials:'AM', name:'Aditya Mehta', info:'Discrete Math · 1st Year', status:'Dijkstra University' },
-];
-
-const discussionComments = {
-  0: [
-    { initials:'MI', name:'Meera Iyer', ago:'2h ago', text:'We mark a vertex when it is popped because that is when its shortest distance is guaranteed.' },
-    { initials:'RV', name:'Rahul Verma', ago:'1h ago', text:'Exactly. If we mark it on push, we might miss a shorter path found later.' },
-  ],
-  1: [{ initials:'AS', name:'Arjun Sharma', ago:'1h ago', text:'This is a great summary — thank you for sharing it.' }],
-};
-
-const notifications = [
-  { id:0, title:'New reply on your question', body:'Meera replied in CS301 Algorithms.', time:'2m ago', icon:'chat' },
-  { id:1, title:'New channel suggestion', body:'Computer Networks may be useful for you.', time:'1h ago', icon:'grid' },
-  { id:2, title:'Friend request accepted', body:'Alex Mensah is now your friend.', time:'3h ago', icon:'users' },
-];
+const channels = [];
+const posts = [];
+const people = [];
+const friendRequests = [];
+const discoverPeople = [];
+const discussionComments = {};
+const notifications = [];
+const chats = [];
 let inboxMessages=[];
-
-const chats = [
-  { person:{initials:'SM',name:'Saved Messages',info:'Personal cloud storage',status:'Private'}, time:'Now', preview:'Your saved items stay here.', messages:[
-    ['theirs','This is your personal Saved Messages channel. Send text, upload files, or share posts here to keep them handy.','Now'],
-  ], saved:true},
-  { person:people[0], time:'9:22', preview:'Just joined and bookmarked. You’re the best!', messages:[
-    ['mine','Hey Alex! Do you have the database normalization notes we discussed in class?','9:15'],
-    ['theirs','Hey! Yeah, I’ve uploaded the full notes. They cover 1NF to BCNF with examples.','9:16'],
-    ['mine','Thanks! This will help a lot ðŸ™Œ','9:17'],
-    ['theirs','Also, check out the short summary I recorded on functional dependencies.','9:18'],
-    ['mine','Awesome! Just listened, super clear ðŸ”¥','9:20'],
-  ]},
-  { person:people[1], time:'8:44', preview:'I added the PDF to our channel.', messages:[['theirs','I added the PDF to our channel.','8:44']] },
-  { person:people[2], time:'Tue', preview:'Ready for tomorrow’s study session?', messages:[['mine','Ready for tomorrow’s study session?','Tue']] },
-  { person:people[3], time:'Mon', preview:'Those notes were really helpful!', messages:[['theirs','Those notes were really helpful!','Mon']] },
-];
-
-// The UI starts empty and is populated exclusively by Firestore subscriptions.
-channels.splice(0);
-posts.splice(0);
-people.splice(0);
-friendRequests.splice(0);
-discoverPeople.splice(0);
-notifications.splice(0);
-chats.splice(0);
 
 function initials(name='StudyLoop') { return name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase(); }
 function avatar(person, cls='') { const known=person?.id?people.find(profile=>profile.id===person.id):person?.authorId?people.find(profile=>profile.id===person.authorId):null;const photoURL=safeAssetUrl((person?.authorId&&known?.photoURL)||person?.photoURL||person?.authorPhotoURL||known?.photoURL);return `<div class="avatar ${escapeHtml(cls)}">${photoURL?`<img src="${photoURL}" alt="${escapeHtml(person?.name||person?.author||'User')}" />`:escapeHtml(person?.initials||initials(person?.name||person?.author))}</div>`; }
@@ -136,7 +75,7 @@ function conversationIdFor(index=state.activeChat) { if(index===0)return `saved_
 function applyInboxMessages() {
   if(!state.userId)return;
   for(const chat of chats)if(!chat.saved)chat.unread=0;
-  const incoming=inboxMessages.filter(message=>message.senderId&&message.senderId!==state.userId);
+  const incoming=inboxMessages.filter(message=>message.senderId&&message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));
   for(const message of incoming){
     const peer=people.find(person=>person.id===message.senderId);if(!peer)continue;
     const chat=chats.find(item=>item.person?.id===peer.id);if(!chat)continue;
@@ -168,12 +107,24 @@ function userFacingError(error, fallback='Something went wrong.') {
     'auth/wrong-password':'Email or password is incorrect.',
     'auth/email-already-in-use':'An account already exists with this email.',
     'auth/weak-password':'Choose a stronger password.',
-    'auth/too-many-requests':'Too many attempts. Try again later.'
+    'permission-denied':'You do not have permission to complete this action.',
+    'firestore/permission-denied':'You do not have permission to complete this action.',
+    'storage/unauthorized':'You do not have permission to access this file.',
+    'storage/quota-exceeded':'Storage is temporarily unavailable. Try again later.',
+    'auth/too-many-requests':'Too many attempts. Try again later.',
+    'auth/network-request-failed':'Check your internet connection and try again.',
+    'account/deactivated':'This account has been deactivated.'
   };
   return messages[code]||fallback;
 }
-// Temporary QA entitlement; production billing must be enforced by trusted backend claims.
-function applyTestEntitlement(email) { state.subscriptionPlan=String(email||'').toLowerCase()==='boipusorante@gmail.com'?'Student+':'Free'; }
+async function loadAccountEntitlement(userId) {
+  try { state.subscriptionPlan=await getAccountEntitlement(userId); }
+  catch (error) { console.warn('Unable to load account entitlement.',error);state.subscriptionPlan='Free'; }
+}
+async function waitForUserProfile(userId) {
+  for(let attempt=0;attempt<8;attempt+=1){const profile=await getUserProfile(userId);if(profile)return profile;await new Promise(resolve=>setTimeout(resolve,150));}
+  return null;
+}
 
 function navButton(page,label,ico,badge='') {
   return `<button class="nav-btn ${state.page===page?'active':''} ${badge?'has-unread':''}" data-nav="${page}">${icon(ico)}<span>${label}</span>${badge?`<b class="nav-badge">${badge}</b>`:''}</button>`;
@@ -202,20 +153,14 @@ function landingPage() {
     <header class="landing-nav"><div class="landing-brand"><span class="brand-mark">${logo()}</span><span>StudyLoop</span></div><button class="landing-login" data-action="sign-in">Sign in</button></header>
     <main class="landing-main">
       <section class="landing-copy"><div class="landing-kicker"><span></span> Built for university life</div><p>One calm place for course channels, shared notes, private messages, and the people you study with.</p><div class="powered-line"><span>Powered by</span><strong>Scheke Innnovationhub</strong><a href="https://scheke.com" target="_blank" rel="noopener noreferrer">Visit us</a></div><div class="landing-actions"><button class="landing-primary" data-action="sign-in">Sign in with email ${icon('arrow')}</button><button class="landing-secondary" data-action="continue-guest">Continue as guest</button></div></section>
-      <section class="landing-visual" aria-label="StudyLoop app preview"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="floating-pill pill-one">${icon('bookmark')} Saved</div><div class="floating-pill pill-two">${icon('users')} 248 students</div><div class="phone-preview"><div class="phone-speaker"></div><div class="phone-top"><div><small>9:41</small><strong>StudyLoop</strong></div>${icon('search')}</div><div class="preview-chips"><span class="active">All</span><span>Algorithms</span><span>Databases</span></div><article class="preview-post"><div class="preview-post-head"><div class="avatar">AS</div><div><strong>Arjun Sharma</strong><small>2h ago</small></div></div><div class="preview-channel"><span>&lt;/&gt;</span> From <b>#CS301 Algorithms</b></div><p>Could someone explain why we mark a vertex as visited when it is popped?</p><div class="preview-actions"><span>${icon('chat')} 12</span><span>${icon('bookmark')}</span><span>${icon('share')}</span></div></article><article class="preview-message"><div class="avatar green">SM</div><div><strong>Saved Messages</strong><p>Database-Cheatsheet.pdf</p></div><span>&#10003;&#10003;</span></article><div class="phone-tabs">${icon('home')}${icon('grid')}${icon('chat')}${icon('users')}${icon('user')}</div></div>
-      </section>
     </main>
     <footer class="landing-footer"><span>StudyLoop</span><span>Channels · Messages · Friends · Saved</span></footer>
   </div>`;
 }
 
-function authModalLegacy(message='Sign in to make StudyLoop yours') {
-  return `<div class="modal-backdrop auth-backdrop" data-action="close-modal"><form class="modal auth-modal" id="auth-form"><div class="auth-book"><span class="brand-mark">${logo()}</span></div><div class="modal-head"><div><h2>Welcome to StudyLoop</h2><p>${message}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Email address</label><input type="email" name="email" required autocomplete="email" placeholder="you@university.edu" /></div><button class="primary auth-submit">Continue with email ${icon('chevron')}</button></div><div class="auth-divider"><span>or</span></div><button type="button" class="secondary auth-guest" data-action="continue-guest">Continue as guest</button><small class="auth-note">Guests can browse channels and read posts. Sign in to join, save, share, post, message, or manage your profile.</small></form></div>`;
-}
-
 function authModal(message='Sign in to make StudyLoop yours') {
   const signingUp=state.authMode==='signup';
-  return `<div class="modal-backdrop auth-backdrop" data-action="close-modal"><form class="modal auth-modal" id="auth-form" autocomplete="on"><div class="auth-book"><span class="brand-mark">${logo()}</span></div><div class="modal-head"><div><h2>Welcome to StudyLoop</h2><p>${message}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="segment auth-tabs"><button class="${state.authMode==='signin'?'active':''}" data-auth-mode="signin" type="button">Sign in</button><button class="${state.authMode==='signin'?'':'active'}" data-auth-mode="signup" type="button">Create account</button></div><div class="form-grid">${signingUp?`<div class="field"><label>Username</label><input name="username" required autocomplete="username" placeholder="Choose a username" /></div>`:''}<div class="field"><label>Email</label><input type="email" name="email" required autocomplete="${signingUp?'email':'username'}" placeholder="you@example.com" /></div><div class="field"><label>Password</label><input type="password" name="password" required minlength="6" autocomplete="${signingUp?'new-password':'current-password'}" placeholder="${signingUp?'At least 6 characters':'Enter your password'}" /></div>${signingUp?`<label class="terms-check"><input type="checkbox" name="terms" required /> I accept the <button type="button" class="inline-link" data-nav="terms">Terms & Conditions</button> and <button type="button" class="inline-link" data-nav="privacy">Privacy Policy</button>.</label>`:''}<button class="primary auth-submit" ${signingUp?'disabled aria-disabled="true"':''}>${signingUp?'Create account':'Sign in'}</button></div><div class="auth-divider"><span>or</span></div><button type="button" class="secondary auth-guest" data-action="continue-guest">Continue as guest</button></form></div>`;
+  return `<div class="modal-backdrop auth-backdrop" data-action="close-modal"><form class="modal auth-modal" id="auth-form" autocomplete="on"><div class="auth-book"><span class="brand-mark">${logo()}</span></div><div class="modal-head"><div><h2>Welcome to StudyLoop</h2><p>${message}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="segment auth-tabs"><button class="${state.authMode==='signin'?'active':''}" data-auth-mode="signin" type="button">Sign in</button><button class="${state.authMode==='signin'?'':'active'}" data-auth-mode="signup" type="button">Create account</button></div><div class="form-grid">${signingUp?`<div class="field"><label>Username</label><input name="username" maxlength="80" required autocomplete="username" placeholder="Choose a username" /></div>`:''}<div class="field"><label>Email</label><input type="email" name="email" maxlength="254" required autocomplete="${signingUp?'email':'username'}" placeholder="you@example.com" /></div><div class="field"><label>Password</label><input type="password" name="password" required minlength="${signingUp?8:6}" autocomplete="${signingUp?'new-password':'current-password'}" placeholder="${signingUp?'At least 8 characters':'Enter your password'}" /></div>${signingUp?`<label class="terms-check"><input type="checkbox" name="terms" required /> I accept the <button type="button" class="inline-link" data-nav="terms">Terms & Conditions</button> and <button type="button" class="inline-link" data-nav="privacy">Privacy Policy</button>.</label>`:''}<button class="primary auth-submit" ${signingUp?'disabled aria-disabled="true"':''}>${signingUp?'Create account':'Sign in'}</button></div><div class="auth-divider"><span>or</span></div><button type="button" class="secondary auth-guest" data-action="continue-guest">Continue as guest</button></form></div>`;
 }
 
 function legalPage(kind) {
@@ -237,9 +182,10 @@ function postCard(post) {
   post={...post,audioURL:safeAssetUrl(post.audioURL)};
   const saved=state.saved.has(post.id);
   const channelIndex=channels.findIndex(channel=>channel.name===post.course);
+  const authorIndex=people.findIndex(person=>person.id===post.authorId);
   const imageUrl=safeAssetUrl(post.imageURL); const audioUrl=safeAssetUrl(post.audioURL); const fileUrl=safeAssetUrl(post.file?.url);
   return `<article class="card feed-card" data-post="${escapeHtml(post.id)}">
-    <div class="post-head">${avatar({ ...post, photoURL:post.authorPhotoURL||post.photoURL },post.avatar||'')}<div class="post-who"><button class="post-author" data-profile="${people.findIndex(person=>person.id===post.authorId)}">${escapeHtml(post.author)}</button><div class="post-meta">${escapeHtml(relativeTime(post.createdAt||post.ago))}</div></div><button class="course-label" data-open-channel="${channelIndex}" aria-label="Open ${escapeHtml(post.course)}"><span class="dot-icon">${escapeHtml(post.icon)}</span><span>From <b>#${escapeHtml(post.course)}</b></span>${icon('chevron')}</button><button class="action" data-action="more" aria-label="More">${icon('more')}</button></div>
+    <div class="post-head">${avatar({ ...post, photoURL:post.authorPhotoURL||post.photoURL },post.avatar||'')}<div class="post-who">${authorIndex>=0?`<button class="post-author" data-profile="${authorIndex}">${escapeHtml(post.author)}</button>`:`<strong class="post-author">${escapeHtml(post.author)}</strong>`}<div class="post-meta">${escapeHtml(relativeTime(post.createdAt||post.ago))}</div></div>${channelIndex>=0?`<button class="course-label" data-open-channel="${channelIndex}" aria-label="Open ${escapeHtml(post.course)}"><span class="dot-icon">${escapeHtml(post.icon)}</span><span>From <b>#${escapeHtml(post.course)}</b></span>${icon('chevron')}</button>`:`<span class="course-label"><span class="dot-icon">${escapeHtml(post.icon)}</span><span>From <b>#${escapeHtml(post.course)}</b></span></span>`}<button class="action" data-action="more" aria-label="More">${icon('more')}</button></div>
     ${post.text?`<p class="post-text">${escapeHtml(post.text)}</p>`:''}
     ${imageUrl?`<img class="post-image" src="${imageUrl}" alt="Post attachment" data-action="zoom-image" />`:''}
     ${post.file?`<div class="file-card"><div class="file-icon">PDF</div><div class="file-info"><strong>${escapeHtml(post.file.name)}</strong><span>${escapeHtml(post.file.meta)}</span></div>${fileUrl?`<a class="download" href="${fileUrl}" download target="_blank" rel="noopener" aria-label="Download">${icon('download')}</a>`:`<button class="download" data-action="download" aria-label="Download">${icon('download')}</button>`}</div>`:''}
@@ -249,60 +195,23 @@ function postCard(post) {
   </article>`;
 }
 
-function homePageLegacy() {
-  const filtered=posts.filter(p=>state.feedFilter==='All'||p.course===state.feedFilter);
-  const chips=['All',...channels.map(channel=>channel.name)];
-  return shell(`<div class="page-grid"><div class="stack">
-    <div class="feed-spacer"></div>
-    <div class="chips">${chips.map((c,i)=>`<button class="chip ${state.feedFilter===c?'active':''}" data-filter="${escapeHtml(c)}" data-filter-index="${i-1}">${escapeHtml(c)}</button>`).join('')}</div>
-    <div class="stack">${filtered.map(postCard).join('')}</div>
-  </div><aside class="stack right-rail">
-    <section class="card section-card"><div class="section-title"><h3>Your activity</h3></div><p class="muted">Activity will appear here as you join channels and participate.</p></section>
-    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${channels.slice(0,3).map(c=>`<div class="mini-channel"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-body"><strong>${c.name}</strong><span>${c.members} members</span></div>${icon('chevron')}</div>`).join('')}</section>
-    <section class="card section-card"><div class="section-title"><h3>Study circle</h3><span class="muted small">12 friends</span></div>${people.slice(0,3).map((p,i)=>`<div class="mini-channel">${avatar(p,['','green','purple'][i])}<div class="channel-body"><strong>${p.name}</strong><span>${p.status}</span></div><button class="action" data-nav="messages">${icon('chat')}</button></div>`).join('')}</section>
-  </aside></div>`,'Home');
-}
-
-function channelsPageLegacy() {
-  const list=channels.filter((c,i)=>(state.channelMode==='discover'||state.joined.has(i))&&c.name.toLowerCase().includes(state.channelSearch.toLowerCase()));
-  return shell(`<div class="stack">
-    <div style="display:flex;gap:12px"><div class="segment" style="flex:1"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="icon-btn" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div>
-    <label class="search-box">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${state.channelSearch}" /></label>
-    <div class="stack">${list.length?list.map((c,i)=>{const idx=channels.indexOf(c),joined=state.joined.has(idx);return `<article class="card channel-card"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-copy"><h3 data-open-channel="${idx}" role="button" tabindex="0">${c.name}</h3><div class="muted">${c.sub}</div><div class="channel-tags"><span class="public">◉ ${c.access}</span><span>•</span><span>${c.members} members</span></div><p>${c.desc}</p></div><button class="${joined?'secondary':'primary'}" data-join="${idx}">${joined?'Open':'Join'}</button></article>`}).join(''):`<div class="card empty"><div class="channel-icon">?</div><h3>No channels found</h3><p>Try a different name or browse all available channels.</p></div>`}</div>
-  </div>`,'Channels',false);
-}
-
-function messagesPageLegacy() {
-  const chat=chats[state.activeChat];
-  return shell(`<div class="messages-layout ${state.chatOpen?'chat-open':''}">
-    <section class="conversation-list"><div class="conversation-search"><label class="search-box">${icon('search')}<input placeholder="Search conversations" /></label></div>${chats.map((c,i)=>`<div class="conversation ${i===state.activeChat?'active':''}" data-chat="${i}">${avatar(c.person,['','green','purple','green'][i])}<div class="conversation-copy"><div class="conversation-top"><strong>${c.person.name}</strong><span class="muted small">${c.time}</span></div><p>${c.preview}</p></div></div>`).join('')}</section>
-    <section class="chat-pane"><header class="chat-head"><button class="icon-btn back-mobile" data-action="back-chats">${icon('arrow')}</button>${avatar(chat.person)}<div><strong>${chat.person.name}</strong><div class="small" style="color:var(--green)">${chat.person.status}</div></div><button class="action push">${icon('search')}</button><button class="action">${icon('more')}</button></header><div class="chat-messages" id="chat-messages">${chat.messages.map(m=>`<div class="bubble ${m[0]}">${m[1]}<span class="bubble-time">${m[2]} ${m[0]==='mine'?'✓✓':''}</span></div>`).join('')}</div><form class="chat-compose" id="chat-form"><button type="button" class="action">${icon('paperclip')}</button><input id="message-input" autocomplete="off" placeholder="Write a message..." /><button class="send-btn" aria-label="Send">${icon('send')}</button></form></section>
-  </div>`,'Messages',false);
-}
-
-function friendsPageLegacy() {
-  return shell(`<div class="stack"><div class="segment" style="grid-template-columns:repeat(3,1fr)"><button class="active">Friends</button><button data-action="requests">Requests · 2</button><button data-action="discover">Discover</button></div><label class="search-box">${icon('search')}<input placeholder="Search people" /></label><div class="people-grid">${people.map((p,i)=>`<article class="card person-card">${avatar(p,['','green','purple','green'][i])}<div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><button class="icon-btn" data-person-chat="${i}" aria-label="Message">${icon('chat')}</button><button class="action">${icon('more')}</button></article>`).join('')}</div><section class="card section-card"><div class="section-title"><h3>People you may know</h3><button class="link-btn">See all</button></div>${['Karan Gupta','Neha Singh','Vikram Patel'].map((n,i)=>`<div class="mini-channel">${avatar({initials:n.split(' ').map(x=>x[0]).join('')},i===1?'green':'')}<div class="channel-body"><strong>${n}</strong><span>Computer Science • Dijkstra University</span></div><button class="secondary" data-action="add-friend">+ Add friend</button></div>`).join('')}</section></div>`,'Friends');
-}
-
-function savedPageLegacy() {
-  const savedPosts=posts.filter(p=>state.saved.has(p.id));
-  return shell(`<div class="stack"><section class="card section-card saved-channel-card"><div class="section-title"><div style="display:flex;align-items:center;gap:10px"><div class="channel-icon green">${icon('bookmark')}</div><div><h3 style="margin:0">Saved Messages</h3><div class="muted small">Your personal cloud channel</div></div></div><button class="primary" data-saved-chat>Open</button></div><p class="muted">Send, upload, or share anything here to keep it safe and easy to find later.</p></section>${savedPosts.length?`<div class="page-grid"><div class="stack">${savedPosts.map(postCard).join('')}</div><aside class="stack right-rail"><section class="card section-card"><h3 style="margin-top:0">Saved for later</h3><p class="muted">Your bookmarked posts, PDFs, voice notes and other useful learning materials live here.</p></section></aside></div>`:`<div class="card empty"><div class="channel-icon">${icon('bookmark')}</div><h3>No saved posts yet</h3><p>Bookmark useful discussions and study material to find them quickly later.</p><button class="primary" data-nav="home">Explore your feed</button></div>`}</div>`,'Saved');
-}
-
 function savedPage() {
-  const savedPosts=posts.filter(p=>state.saved.has(p.id));
+  const savedPosts=posts.filter(p=>state.saved.has(p.id)&&canViewPost(p));
   return shell(savedPosts.length?`<div class="page-grid"><div class="stack">${savedPosts.map(postCard).join('')}</div><aside class="stack right-rail"><section class="card section-card"><h3 style="margin-top:0">Saved for later</h3><p class="muted">Your bookmarked posts, PDFs, voice notes and other useful learning materials live here.</p></section></aside></div>`:`<div class="card empty"><div class="channel-icon">${icon('bookmark')}</div><h3>No saved posts yet</h3><p>Bookmark useful discussions and study material to find them quickly later.</p><button class="primary" data-nav="home">Explore your feed</button></div>`,'Saved');
-}
-
-function profilePageLegacy2() {
-  return shell(`<div class="stack"><section class="card profile-hero">${avatar({initials:'NS'})}<div><h2>Anonymous Student</h2><div class="muted">@naledi • Computer Science, 3rd Year</div><p>Learning in public, one study session at a time.</p></div><button class="secondary" style="margin-left:auto" data-action="edit-profile">Edit profile</button></section><div class="stat-row"><div class="stat"><strong>12</strong><span>Friends</span></div><div class="stat"><strong>4</strong><span>Channels</span></div><div class="stat"><strong>${state.saved.size}</strong><span>Saved</span></div></div><section class="card section-card"><div class="section-title"><h3>Account</h3></div>${[['user','Personal information'],['bell','Notifications'],['bookmark','Saved posts'],['users','Privacy & security']].map(r=>`<div class="settings-row">${icon(r[0])}<span>${r[1]}</span>${icon('chevron','i-right')}</div>`).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
 }
 
 function profilePage() {
   const accountRows=[['user','Personal information'],['bell','Notifications'],['bookmark','Saved posts'],['grid','Plans & storage'],['users','Privacy & security']];
   const studyLine=[state.profileCourse,state.profileYear].filter(Boolean).join(' · ')||'Add your course and year level';
-  return shell(`<div class="stack"><section class="card profile-hero">${currentUserAvatar()}<div><h2>${escapeHtml(state.profileName)}</h2><div class="muted">${escapeHtml(studyLine)}</div><p>${escapeHtml(state.profileBio||'Tell classmates a little about yourself.')}</p></div><button class="secondary" style="margin-left:auto" data-action="edit-profile">Edit profile</button></section><div class="stat-row"><div class="stat"><strong>${state.acceptedRequests.size}</strong><span>Friends</span></div><div class="stat"><strong>${state.joined.size}</strong><span>Channels</span></div><div class="stat"><strong>${state.saved.size}</strong><span>Saved</span></div></div><section class="card section-card"><div class="section-title"><h3>Account</h3></div>${accountRows.map(r=>`<button class="settings-row" data-setting="${escapeHtml(r[1])}">${icon(r[0])}<span>${escapeHtml(r[1])}</span>${icon('chevron','i-right')}</button>`).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
+  const friendCount=state.relations.filter(relation=>relation.status==='accepted').length;
+  return shell(`<div class="stack"><section class="card profile-hero">${currentUserAvatar()}<div><h2>${escapeHtml(state.profileName)}</h2><div class="muted">${escapeHtml(studyLine)}</div><p>${escapeHtml(state.profileBio||'Tell classmates a little about yourself.')}</p></div><button class="secondary" style="margin-left:auto" data-action="edit-profile">Edit profile</button></section><div class="stat-row"><div class="stat"><strong>${friendCount}</strong><span>Friends</span></div><div class="stat"><strong>${state.joined.size}</strong><span>Channels</span></div><div class="stat"><strong>${state.saved.size}</strong><span>Saved</span></div></div><section class="card section-card"><div class="section-title"><h3>Account</h3></div>${accountRows.map(r=>`<button class="settings-row" data-setting="${escapeHtml(r[1])}">${icon(r[0])}<span>${escapeHtml(r[1])}</span>${icon('chevron','i-right')}</button>`).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
 }
+
+async function deletePostAndAttachments(item) {
+  await deleteCloudPost(item.id);
+  await Promise.all([item.imageURL,item.audioURL,item.file?.url].filter(Boolean).map(url=>deleteUploadedAsset(url).catch(error=>console.warn('Unable to remove an attachment after deleting its post.',error))));
+}
+function canViewPost(post) { const index=channels.findIndex(channel=>channel.id===post.channelId||channel.name===post.course);const channel=channels[index];return !channel||channel.access==='Public'||(!state.isGuest&&state.joined.has(index)); }
 
 function settingsPage() {
   const setting=state.activeSetting;
@@ -316,15 +225,16 @@ function settingsPage() {
 
 // Updated feed view: channel attribution is intentionally prominent on every post.
 function homePage() {
-  const filtered=posts.filter(p=>state.feedFilter==='All'||p.course===state.feedFilter);
+  const filtered=posts.filter(p=>canViewPost(p)&&(state.feedFilter==='All'||p.course===state.feedFilter));
   const chips=['All',...channels.map(channel=>channel.name)];
+  const friends=people.filter(person=>isAcceptedFriend(person.id));
   const feedContent=!channels.length?`<div class="card empty channel-empty-state"><div class="channel-icon">${icon('plus')}</div><h2>No channel created yet</h2><p class="muted">Create a channel to start sharing notes, questions, and study resources.</p><button class="primary" data-action="create-channel">Create a channel</button></div>`:filtered.length?filtered.map(postCard).join(''):`<div class="card empty"><div class="channel-icon">${icon('grid')}</div><h2>No posts yet</h2><p class="muted">Join a channel or create one to see study posts here.</p><button class="primary" data-nav="channels">Browse channels</button></div>`;
   return shell(`<div class="page-grid"><div class="stack">
     <div class="chips">${chips.map(c=>`<button class="chip ${state.feedFilter===c?'active':''}" data-filter="${c}">${c}</button>`).join('')}</div>
     <div class="stack">${feedContent}</div>
   </div><aside class="stack right-rail">
-    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${channels.slice(0,3).map(raw=>`<div class="mini-channel"><div class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</div><div class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${raw.members} members</span></div>${icon('chevron')}</div>`).join('')}</section>
-    <section class="card section-card"><div class="section-title"><h3>Study circle</h3><span class="muted small">${people.length} friends</span></div>${people.slice(0,3).map((p,i)=>`<div class="mini-channel" data-profile="${i}">${avatar(p,['','green','purple'][i])}<div class="channel-body"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.status)}</span></div><button class="action" data-nav="messages">${icon('chat')}</button></div>`).join('')}</section>
+    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${channels.slice(0,3).map(raw=>`<div class="mini-channel"><div class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</div><div class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.access||'Public')} channel</span></div>${icon('chevron')}</div>`).join('')}</section>
+    <section class="card section-card"><div class="section-title"><h3>Study circle</h3><span class="muted small">${friends.length} friends</span></div>${friends.length?friends.slice(0,3).map((p,i)=>`<div class="mini-channel" data-profile="${people.indexOf(p)}">${avatar(p,['','green','purple'][i])}<div class="channel-body"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.status)}</span></div><button class="action" data-person-chat="${people.indexOf(p)}">${icon('chat')}</button></div>`).join(''):'<p class="muted">Accepted friends will appear here.</p>'}</section>
   </aside></div>`,'Home');
 }
 
@@ -333,33 +243,20 @@ function channelsPage() {
   return shell(`<div class="stack">
     <div style="display:flex;gap:12px"><div class="segment" style="flex:1"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="icon-btn" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div>
     <label class="search-box">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${state.channelSearch}" /></label>
-    <div class="stack">${list.length?list.map((raw)=>{const c={...raw,name:escapeHtml(raw.name),sub:escapeHtml(raw.sub),access:escapeHtml(raw.access),desc:escapeHtml(raw.desc),icon:escapeHtml(raw.icon),cls:escapeHtml(raw.cls)};const idx=channels.indexOf(raw),joined=!state.isGuest&&state.joined.has(idx);return `<article class="card channel-card"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-copy"><h3 data-open-channel="${idx}" role="button" tabindex="0">${c.name}</h3><div class="muted">${c.sub}</div><div class="channel-tags"><span class="public">◉ ${c.access}</span><span>•</span><span>${raw.members} members</span></div><p>${c.desc}</p></div>${joined?`<div class="channel-actions"><button class="secondary" data-open-channel="${idx}">Open</button><button class="action leave" data-leave="${idx}">Leave</button></div>`:`<button class="primary" data-join="${idx}">Join</button>`}</article>`}).join(''):`<div class="card empty"><div class="channel-icon">?</div><h3>No channels found</h3><p>Try a different name or browse all available channels.</p></div>`}</div>
+    <div class="stack">${list.length?list.map((raw)=>{const c={...raw,name:escapeHtml(raw.name),sub:escapeHtml(raw.sub),access:escapeHtml(raw.access),desc:escapeHtml(raw.desc),icon:escapeHtml(raw.icon),cls:escapeHtml(raw.cls)};const idx=channels.indexOf(raw),joined=!state.isGuest&&state.joined.has(idx);return `<article class="card channel-card"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-copy"><h3 data-open-channel="${idx}" role="button" tabindex="0">${c.name}</h3><div class="muted">${c.sub}</div><div class="channel-tags"><span class="public">◉ ${c.access}</span></div><p>${c.desc}</p></div>${joined?`<div class="channel-actions"><button class="secondary" data-open-channel="${idx}">Open</button><button class="action leave" data-leave="${idx}">Leave</button></div>`:`<button class="primary" data-join="${idx}">Join</button>`}</article>`}).join(''):`<div class="card empty"><div class="channel-icon">?</div><h3>No channels found</h3><p>Try a different name or browse all available channels.</p></div>`}</div>
   </div>`,'Channels',false);
-}
-
-function forwardedPost(post) {
-  return { type:'forwarded-post', side:'mine', time:'Now', post:{ course:post.course, author:post.author, text:post.text, file:post.file, audio:post.audio } };
-}
-
-function messageBubbleLegacy(message) {
-  if (!Array.isArray(message) && message.type==='forwarded-post') {
-    let post=message.post||{};
-    post={...post,course:escapeHtml(post.course),author:escapeHtml(post.author),text:escapeHtml(post.text),file:post.file?{...post.file,name:escapeHtml(post.file.name),meta:escapeHtml(post.file.meta)}:null};
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('share')} Forwarded post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span><p>${post.text}</p>${post.file?`<div class="forwarded-file"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span></div>`:''}${post.audio?`<div class="forwarded-audio">${icon('paperclip')} Voice note</div>`:''}</div><span class="bubble-time">${message.time} ✓✓</span></div>`;
-  }
-  return `<div class="bubble ${escapeHtml(message[0])}">${escapeHtml(message[1])}<span class="bubble-time">${escapeHtml(message[2])} ${message[0]==='mine'?'✓✓':''}</span></div>`;
 }
 
 function messageBubble(message) {
   if (!Array.isArray(message) && message.type==='post-link') {
     const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('share')} Forwarded post</div><button class="post-link-card" data-open-post="${escapeHtml(message.postId)}">${icon('chevron')} Open original post</button><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?'&#10003;':''}</span></div></div>`;
+    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('share')} Forwarded post</div><button class="post-link-card" data-open-post="${escapeHtml(message.postId)}">${icon('chevron')} Open original post</button><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='attachment') {
     const file=message.file||{}; const fileUrl=safeAssetUrl(file.url);
     const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
     const shareButton=message.side==='mine'&&message.id?`<button class="message-share" data-forward-message="${escapeHtml(message.id)}">Forward</button>`:'';
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?`<audio class="post-audio" controls src="${fileUrl}"></audio>`:fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer">${shareButton}${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?'&#10003;':''}</span></div></div>`;
+    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?`<audio class="post-audio" controls src="${fileUrl}"></audio>`:fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer">${shareButton}${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='forwarded-post') {
     let post=message.post||{};
@@ -369,18 +266,29 @@ function messageBubble(message) {
     const audioUrl=safeAssetUrl(post.audioURL);
     const fileMarkup=post.file?(fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${post.file.name}"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span>${icon('download')}</a>`:`<div class="forwarded-file"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span></div>`):'';
     const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('bookmark')} Saved post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span>${post.text?`<p>${post.text}</p>`:''}${imageUrl?`<img class="saved-post-image" src="${imageUrl}" alt="Saved post attachment" data-action="zoom-image" />`:''}${fileMarkup}${audioUrl?`<audio class="post-audio" controls src="${audioUrl}"></audio>`:''}</div><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?'&#10003;':''}</span></div></div>`;
+    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('bookmark')} Saved post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span>${post.text?`<p>${post.text}</p>`:''}${imageUrl?`<img class="saved-post-image" src="${imageUrl}" alt="Saved post attachment" data-action="zoom-image" />`:''}${fileMarkup}${audioUrl?`<audio class="post-audio" controls src="${audioUrl}"></audio>`:''}</div><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   const own=message[0]==='mine'&&message[3];const editButton=own?`<button class="message-share" data-edit-message="${escapeHtml(message[3])}">Edit</button>`:'';const deleteButton=own?`<button class="message-delete" data-delete-message="${escapeHtml(message[3])}">Delete</button>`:'';
-  return `<div class="bubble ${escapeHtml(message[0])}">${escapeHtml(message[1])}<div class="bubble-footer">${editButton}${deleteButton}<span class="bubble-time">${escapeHtml(message[2])} ${message[0]==='mine'?'&#10003;':''}</span></div></div>`;
+  return `<div class="bubble ${escapeHtml(message[0])}">${escapeHtml(message[1])}<div class="bubble-footer">${editButton}${deleteButton}<span class="bubble-time">${escapeHtml(message[2])} ${message[0]==='mine'?(message[4]?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
 }
+
+function relationFor(userId) { return state.relations.find(relation=>(relation.senderId===state.userId&&relation.receiverId===userId)||(relation.receiverId===state.userId&&relation.senderId===userId)); }
+function isAcceptedFriend(userId) { return relationFor(userId)?.status==='accepted'; }
 
 function messagesPage() {
   if (!chats.length) syncChats();
   const chat=chats[state.activeChat]||chats[0];
+  const visibleChats=chats.map((c,i)=>({c,i})).filter(({c})=>!c.saved&&(isAcceptedFriend(c.person?.id)||c.preview||c.unread));
+  const isIncomingRequest=entry=>{const relation=relationFor(entry.c.person?.id);return relation?.status==='pending'&&relation.receiverId===state.userId;};
+  const requestChats=visibleChats.filter(isIncomingRequest);
+  const regularChats=visibleChats.filter(entry=>!isIncomingRequest(entry));
+  const renderChat=({c,i})=>`<div class="conversation ${i===state.activeChat?'active':''}" data-chat="${i}">${avatar(c.person,['','green','purple','green'][i]||'')}<div class="conversation-copy"><div class="conversation-top"><strong>${escapeHtml(c.person.name)}</strong><span class="muted small">${escapeHtml(c.time)}</span></div><p>${escapeHtml(c.preview)}</p></div>${c.unread?`<span class="message-unread">${c.unread}</span>`:''}</div>`;
+  const peerId=chat?.person?.id;
+  const blocked=peerId&&state.blockedUsers.has(peerId);
+  const pendingRequest=peerId?relationFor(peerId):null;
   return shell(`<div class="messages-layout ${state.chatOpen?'chat-open':''}">
-    <section class="conversation-list"><div class="conversation-search"><label class="search-box">${icon('search')}<input placeholder="Search conversations" /></label></div>${chats.map((c,i)=>({c,i})).filter(({c})=>!c.saved).map(({c,i})=>`<div class="conversation ${i===state.activeChat?'active':''}" data-chat="${i}">${avatar(c.person,['','green','purple','green'][i]||'')}<div class="conversation-copy"><div class="conversation-top"><strong>${c.person.name}</strong><span class="muted small">${c.time}</span></div><p>${c.preview}</p></div>${c.unread?`<span class="message-unread">${c.unread}</span>`:''}</div>`).join('')}</section>
-    <section class="chat-pane"><header class="chat-head"><button class="icon-btn back-mobile" data-action="back-chats">${icon('arrow')}</button>${avatar(chat.person,chat.saved?'green':'')}<div><strong>${chat.person.name}</strong><div class="small" style="color:var(--green)">${chat.person.status}</div></div><button class="action push">${icon('search')}</button><button class="action">${icon('more')}</button></header><div class="chat-messages" id="chat-messages">${chat.messages.map(messageBubble).join('')}</div><form class="chat-compose" id="chat-form"><button type="button" class="action" data-action="upload-saved">${icon('paperclip')}</button><button type="button" class="action" data-action="record-chat-voice" aria-label="Record voice note">${icon('mic')}</button>${state.chatAudioURL?`<audio class="chat-voice-preview" controls src="${state.chatAudioURL}"></audio><button type="button" class="message-delete" data-action="discard-chat-voice">Discard</button>`:''}<input id="message-input" autocomplete="off" placeholder="Write a message..." /><button class="send-btn" aria-label="Send">${icon('send')}</button></form></section>
+    <section class="conversation-list"><div class="conversation-search"><label class="search-box">${icon('search')}<input placeholder="Search conversations" /></label></div>${requestChats.length?`<div class="conversation-section-label">Message requests · ${requestChats.length}</div>${requestChats.map(renderChat).join('')}`:''}${regularChats.length?regularChats.map(renderChat).join(''):`<div class="card empty"><h3>No conversations yet</h3><p>Message a classmate from Discover to start a conversation.</p></div>`}</section>
+    <section class="chat-pane"><header class="chat-head"><button class="icon-btn back-mobile" data-action="back-chats">${icon('arrow')}</button>${avatar(chat.person,chat.saved?'green':'')}<div><strong>${escapeHtml(chat.person.name)}</strong><div class="small">${chat.saved?'Private saved space':'StudyLoop member'}</div></div>${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?`<button class="primary push" data-request-action="accepted" data-request-id="${escapeHtml(pendingRequest.id)}">Accept</button>`:''}${peerId?`<button class="secondary ${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?'':'push'}" data-action="toggle-block-user" data-user-id="${escapeHtml(peerId)}">${blocked?'Unblock':'Block'}</button>`:''}</header><div class="chat-messages" id="chat-messages">${chat.messages.map(messageBubble).join('')}</div>${blocked?`<div class="chat-compose blocked-compose">Unblock this user to send messages.</div>`:`<form class="chat-compose" id="chat-form"><button type="button" class="action" data-action="upload-saved">${icon('paperclip')}</button><button type="button" class="action" data-action="record-chat-voice" aria-label="Record voice note">${icon('mic')}</button>${state.chatAudioURL?`<audio class="chat-voice-preview" controls src="${state.chatAudioURL}"></audio><button type="button" class="message-delete" data-action="discard-chat-voice">Discard</button>`:''}<input id="message-input" autocomplete="off" maxlength="4000" placeholder="Write a message..." /><button class="send-btn" aria-label="Send">${icon('send')}</button></form>`}</section>
   </div>`,'Messages',false);
 }
 
@@ -394,34 +302,34 @@ function userProfilePage() {
   if(!sourceUser) return shell(`<div class="card empty"><h3>User profile unavailable</h3><p>This profile is no longer available.</p></div>`,'Profile',false);
   const user={...sourceUser,name:escapeHtml(sourceUser.name),info:escapeHtml(sourceUser.info),status:escapeHtml(sourceUser.status)};
   const userChannels=profileChannelsFor(state.profileUser);
-  return shell(`<div class="stack"><button class="back-link" data-nav="friends">${icon('arrow')} Back to friends</button><section class="card profile-hero">${avatar(user,state.profileUser===1?'green':'')}<div><h2>${user.name}</h2><div class="muted">${user.info}</div><p>${user.status} · StudyLoop member</p></div><button class="primary" data-person-chat="${state.profileUser}">Message</button></section><section class="card section-card"><div class="section-title"><h3>${user.name.split(' ')[0]}’s channels</h3><span class="muted small">${userChannels.length} channels</span></div>${userChannels.map(idx=>{const c=channels[idx],joined=state.joined.has(idx);return `<div class="mini-channel"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-body"><strong>${c.name}</strong><span>${c.sub} · ${c.members} members</span></div>${joined?`<button class="secondary" data-open-channel="${idx}">Open</button>`:`<button class="primary" data-join="${idx}">Join</button>`}</div>`}).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
+  const isBlocked=state.blockedUsers.has(sourceUser.id);
+  return shell(`<div class="stack"><button class="back-link" data-nav="friends">${icon('arrow')} Back to friends</button><section class="card profile-hero">${avatar(user,state.profileUser===1?'green':'')}<div><h2>${user.name}</h2><div class="muted">${user.info}</div><p>${user.status} · StudyLoop member</p></div><button class="primary" data-person-chat="${state.profileUser}">Message</button></section><section class="card section-card"><div class="section-title"><h3>${user.name.split(' ')[0]}’s channels</h3><span class="muted small">${userChannels.length} channels</span></div>${userChannels.map(idx=>{const c=channels[idx],joined=state.joined.has(idx);return `<div class="mini-channel"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-body"><strong>${c.name}</strong><span>${c.sub} · ${c.access} channel</span></div>${joined?`<button class="secondary" data-open-channel="${idx}">Open</button>`:`<button class="primary" data-join="${idx}">Join</button>`}</div>`}).join('')}</section><button class="secondary danger-action" data-action="toggle-block-user" data-user-id="${escapeHtml(sourceUser.id)}">${isBlocked?'Unblock user':'Block user'}</button></div>`,'Profile',false);
 }
 
 function channelDetailPage() {
   const channelRaw=channels[state.activeChannel]||channels[0];
   const channel={...channelRaw,name:escapeHtml(channelRaw.name),course:escapeHtml(channelRaw.course),sub:escapeHtml(channelRaw.sub),access:escapeHtml(channelRaw.access),desc:escapeHtml(channelRaw.desc),icon:escapeHtml(channelRaw.icon),cls:escapeHtml(channelRaw.cls)};
-  const channelPosts=posts.filter(p=>p.course===channelRaw.name);
-  const files=channelPosts.filter(p=>p.file);
-  const members=people.filter((p,i)=>profileChannelsFor(i).includes(state.activeChannel));
   const joined=!state.isGuest&&state.joined.has(state.activeChannel);
+  const channelPosts=posts.filter(p=>p.course===channelRaw.name&&(channelRaw.access==='Public'||joined));
+  const files=channelPosts.filter(p=>p.file);
+  const creator=channelRaw.ownerId===state.userId?{name:state.profileName,photoURL:state.profilePhotoURL,initials:initials(state.profileName)}:people.find(person=>person.id===channelRaw.ownerId);
+  const createdDate=channelRaw.createdAt?.toDate?channelRaw.createdAt.toDate().toLocaleDateString([],{year:'numeric',month:'long',day:'numeric'}):'Date unavailable';
   const body=state.channelTab==='files'
     ? (files.length?files.map(p=>`<div class="card file-row"><div class="file-icon">PDF</div><div class="file-info"><strong>${p.file.name}</strong><span>${p.file.meta} · From ${p.author}</span></div><button class="download" data-action="download">${icon('download')}</button></div>`).join(''):`<div class="card empty"><div class="channel-icon">${icon('paperclip')}</div><h3>No files yet</h3><p>Files shared in this channel will appear here.</p></div>`)
-    : state.channelTab==='members'
-      ? `<div class="people-grid">${members.length?members.map(p=>`<article class="card person-card" data-profile="${people.indexOf(p)}">${avatar(p)}<div class="person-info"><strong>${p.name}</strong><span>${p.info}</span></div>${icon('chevron')}</article>`).join(''):`<div class="card empty"><h3>No members yet</h3></div>`}</div>`
+    : state.channelTab==='about'
+      ? `<section class="card section-card"><h3>About this channel</h3><p>${channel.desc||'No description provided.'}</p><div class="settings-row">${creator?avatar(creator):avatar({initials:'SL'})}<span><strong>Created by ${escapeHtml(creator?.name||'StudyLoop member')}</strong><small class="muted">${escapeHtml(createdDate)}</small></span></div><div class="settings-row">${icon(channel.access==='Private'?'bookmark':'users')}<span>${channel.access} channel${channel.course?` · ${channel.course}`:''}${channel.sub?` · ${channel.sub}`:''}</span></div></section>`
       : (channelPosts.length?channelPosts.map(postCard).join(''):`<div class="card empty"><div class="channel-icon ${channel.cls}">${channel.icon}</div><h3>No posts yet</h3><p>Start the conversation in this channel.</p><button class="primary" data-action="channel-post">New post</button></div>`);
-  return shell(`<div class="stack"><button class="back-link" data-nav="channels">${icon('arrow')} Back to channels</button><section class="card channel-hero"><div class="channel-icon ${channel.cls}">${channel.icon}</div><div class="channel-hero-copy"><h2>${channel.name}</h2><p>${channel.desc}</p><div class="channel-tags"><span class="public">◉ ${channel.access}</span><span>•</span><span>${channel.members} members</span><span>•</span><span>${channel.sub}</span></div></div>${joined?`<button class="secondary" data-leave="${state.activeChannel}">Leave</button>`:`<button class="primary" data-join="${state.activeChannel}">Join</button>`}</section><div class="channel-tabs"><button class="${state.channelTab==='posts'?'active':''}" data-channel-tab="posts">Posts</button><button class="${state.channelTab==='files'?'active':''}" data-channel-tab="files">Files</button><button class="${state.channelTab==='members'?'active':''}" data-channel-tab="members">Members</button></div><div class="stack">${body}</div>${joined&&state.channelTab==='posts'?`<button class="new-post-bar" data-action="channel-post" aria-label="Create a post" title="Create a post">${icon('plus')}</button>`:''}</div>`,'Channel',false);
-}
-
-function friendsPageLegacy2() {
-  return shell(`<div class="stack"><div class="segment" style="grid-template-columns:repeat(3,1fr)"><button class="active">Friends</button><button data-action="requests">Requests · 2</button><button data-action="discover">Discover</button></div><label class="search-box">${icon('search')}<input placeholder="Search people" /></label><div class="people-grid">${people.map((p,i)=>`<article class="card person-card" data-profile="${i}">${avatar(p,['','green','purple','green'][i])}<div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><button class="icon-btn" data-person-chat="${i}" aria-label="Message">${icon('chat')}</button><button class="action">${icon('more')}</button></article>`).join('')}</div><section class="card section-card"><div class="section-title"><h3>People you may know</h3><button class="link-btn">See all</button></div>${['Karan Gupta','Neha Singh','Vikram Patel'].map((n,i)=>`<div class="mini-channel">${avatar({initials:n.split(' ').map(x=>x[0]).join('')},i===1?'green':'')}<div class="channel-body"><strong>${n}</strong><span>Computer Science · Dijkstra University</span></div><button class="secondary" data-action="add-friend">+ Add friend</button></div>`).join('')}</section></div>`,'Friends');
+  return shell(`<div class="stack"><button class="back-link" data-nav="channels">${icon('arrow')} Back to channels</button><section class="card channel-hero"><div class="channel-icon ${channel.cls}">${channel.icon}</div><div class="channel-hero-copy"><h2>${channel.name}</h2><p>${channel.desc}</p><div class="channel-tags"><span class="public">◉ ${channel.access}</span>${channel.sub?`<span>•</span><span>${channel.sub}</span>`:''}</div></div>${joined?`<button class="secondary" data-leave="${state.activeChannel}">Leave</button>`:`<button class="primary" data-join="${state.activeChannel}">Join</button>`}</section><div class="channel-tabs"><button class="${state.channelTab==='posts'?'active':''}" data-channel-tab="posts">Posts</button><button class="${state.channelTab==='files'?'active':''}" data-channel-tab="files">Files</button><button class="${state.channelTab==='about'?'active':''}" data-channel-tab="about">About</button></div><div class="stack">${body}</div>${joined&&state.channelTab==='posts'?`<button class="new-post-bar" data-action="channel-post" aria-label="Create a post" title="Create a post">${icon('plus')}</button>`:''}</div>`,'Channel',false);
 }
 
 function friendsPage() {
-  const tabs=[['friends','Friends'],['requests',`Requests · ${friendRequests.filter((_,i)=>!state.acceptedRequests.has(i)).length}`],['discover','Discover']];
+  const incoming=state.relations.filter(relation=>relation.receiverId===state.userId&&relation.status==='pending');
+  const acceptedIds=new Set(state.relations.filter(relation=>relation.status==='accepted').map(relation=>relation.senderId===state.userId?relation.receiverId:relation.senderId));
+  const tabs=[['friends','Friends'],['requests',`Requests · ${incoming.length}`],['discover','Discover']];
   const tabBar=`<div class="segment friends-tabs" style="grid-template-columns:repeat(3,1fr)">${tabs.map(([id,label])=>`<button class="${state.friendTab===id?'active':''}" data-friend-tab="${id}">${label}</button>`).join('')}</div>`;
-  const friendCards=people.map((raw,i)=>{const p={...raw,name:escapeHtml(raw.name),info:escapeHtml(raw.info),status:escapeHtml(raw.status)};return `<article class="card person-card" data-profile="${i}">${avatar(p,['','green','purple','green'][i])}<div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><button class="icon-btn" data-person-chat="${i}" aria-label="Message">${icon('chat')}</button></article>`}).join('');
-  const requestCards=friendRequests.filter((_,i)=>!state.acceptedRequests.has(i)).map((p,i)=>`<article class="card person-card"><div class="avatar ${i?'green':''}">${p.initials}</div><div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><div class="friend-actions"><button class="secondary" data-request-action="decline" data-request-id="${i}">Decline</button><button class="primary" data-request-action="accept" data-request-id="${i}">Accept</button></div></article>`).join('')||`<div class="card empty"><div class="channel-icon green">${icon('check')}</div><h3>You're all caught up</h3><p>No pending friend requests.</p></div>`;
-  const discoverCards=discoverPeople.filter(p=>`${p.name} ${p.info} ${p.status}`.toLowerCase().includes(state.peopleSearch.toLowerCase())).map((p,i)=>`<article class="card person-card"><div class="avatar ${i===1?'green':'purple'}">${p.initials}</div><div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><button class="${state.sentRequests.has(i)?'secondary':'primary'}" data-discover-add="${i}" ${state.sentRequests.has(i)?'disabled':''}>${state.sentRequests.has(i)?'Request sent':'Add friend'}</button></article>`).join('');
+  const friendCards=people.map((raw,i)=>({raw,i})).filter(({raw})=>acceptedIds.has(raw.id)).map(({raw,i})=>{const p={...raw,name:escapeHtml(raw.name),info:escapeHtml(raw.info),status:escapeHtml(raw.status)};return `<article class="card person-card" data-profile="${i}">${avatar(p,['','green','purple','green'][i])}<div class="person-info"><strong>${p.name}</strong><span>${p.info}</span><span>${p.status}</span></div><button class="icon-btn" data-person-chat="${i}" aria-label="Message">${icon('chat')}</button></article>`}).join('')||`<div class="card empty"><h3>No friends yet</h3><p>Use Discover to find classmates and send a request.</p></div>`;
+  const requestCards=incoming.map(relation=>{const raw=people.find(person=>person.id===relation.senderId);if(!raw)return'';return `<article class="card person-card">${avatar(raw)}<div class="person-info"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.info)}</span></div><div class="friend-actions"><button class="secondary" data-request-action="declined" data-request-id="${escapeHtml(relation.id)}">Decline</button><button class="primary" data-request-action="accepted" data-request-id="${escapeHtml(relation.id)}">Accept</button></div></article>`}).join('')||`<div class="card empty"><div class="channel-icon green">${icon('check')}</div><h3>You're all caught up</h3><p>No pending friend requests.</p></div>`;
+  const discoverCards=discoverPeople.filter(p=>`${p.name} ${p.info} ${p.status}`.toLowerCase().includes(state.peopleSearch.toLowerCase())).map((p,i)=>{const relation=relationFor(p.id);const label=relation?.status==='accepted'?'Friends':relation?.status==='pending'?'Request sent':'Add friend';return `<article class="card person-card" data-profile="${people.indexOf(p)}">${avatar(p,i===1?'green':'purple')}<div class="person-info"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.info)}</span><span>${escapeHtml(p.status)}</span></div><button class="${relation?'secondary':'primary'}" data-discover-add="${escapeHtml(p.id)}" ${relation?'disabled':''}>${label}</button></article>`}).join('')||`<div class="card empty"><h3>No users found</h3><p>Try another search.</p></div>`;
   const content=state.friendTab==='friends'?friendCards:state.friendTab==='requests'?requestCards:discoverCards;
   return shell(`<div class="stack">${tabBar}<label class="search-box">${icon('search')}<input id="people-search" placeholder="Search people" value="${escapeHtml(state.peopleSearch)}" /></label><div class="people-grid">${content}</div></div>`,'Friends');
 }
@@ -446,11 +354,11 @@ function postComposerModal() {
   const channel=channels[state.activeChannel]||channels[0];
   const displayChannelName=escapeHtml(channel.name);
   const premium=true;
-  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="post-form"><div class="modal-head"><div><h2>New post</h2><p class="muted" style="margin:4px 0 0">Posting in #${displayChannelName}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="field"><label>Text</label><textarea name="postText" maxlength="1000" placeholder="Ask a question, share a note, or start a discussion…"></textarea></div>${premium?`<div class="field"><label>Attachments</label><input type="file" name="assets" multiple accept="image/*,audio/*,application/pdf" /><span class="muted small">You can combine text, an image, a file, and a voice note.</span></div><div class="voice-recorder"><button type="button" class="secondary" data-action="record-voice">${icon('chat')} Record voice note</button><span class="muted small" id="voice-status">Not recording</span><audio id="voice-preview" controls hidden></audio></div>`:`<div class="card" style="padding:12px;background:var(--tg-blue-pale);color:var(--tg-blue-dark)">All accounts can publish text, images, files, and voice notes. Each upload is limited to 50 MB.</div>`}<div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Publish post</button></div></form></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="post-form"><div class="modal-head"><div><h2>New post</h2><p class="muted" style="margin:4px 0 0">Posting in #${displayChannelName}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="field"><label>Text</label><textarea name="postText" maxlength="1000" placeholder="Ask a question, share a note, or start a discussion…"></textarea></div>${premium?`<div class="field"><label>Attachments</label><input type="file" name="assets" multiple accept="image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/webm,application/pdf" /><span class="muted small">You can combine text, an image, a file, and a voice note.</span></div><div class="voice-recorder"><button type="button" class="secondary" data-action="record-voice">${icon('chat')} Record voice note</button><span class="muted small" id="voice-status">Not recording</span><audio id="voice-preview" controls hidden></audio></div>`:`<div class="card" style="padding:12px;background:var(--tg-blue-pale);color:var(--tg-blue-dark)">All accounts can publish text, images, files, and voice notes. Each upload is limited to 50 MB.</div>`}<div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Publish post</button></div></form></div>`;
 }
 
 function profileEditorModal() {
-  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="profile-form"><div class="modal-head"><h2>Edit profile</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Profile picture</label><input type="file" name="profilePhoto" accept="image/*" /><span class="muted small">Choose a clear photo of yourself.</span></div><div class="field"><label>Display name</label><input name="displayName" required value="${escapeHtml(state.profileName)}" /></div><div class="field"><label>Course</label><input name="course" required value="${escapeHtml(state.profileCourse)}" placeholder="e.g. Computer Science" /></div><div class="field"><label>Year level</label><input name="yearLevel" required value="${escapeHtml(state.profileYear)}" placeholder="e.g. Year 3" /></div><div class="field"><label>Bio</label><textarea name="bio" maxlength="180" placeholder="Tell classmates about your learning interests.">${escapeHtml(state.profileBio)}</textarea></div></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Save changes</button></div></form></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="profile-form"><div class="modal-head"><h2>Edit profile</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Profile picture</label><input type="file" name="profilePhoto" accept="image/jpeg,image/png,image/webp" /><span class="muted small">Choose a JPEG, PNG, or WebP image up to 10 MB.</span></div><div class="field"><label>Display name</label><input name="displayName" maxlength="80" required value="${escapeHtml(state.profileName)}" /></div><div class="field"><label>Course</label><input name="course" maxlength="120" value="${escapeHtml(state.profileCourse)}" placeholder="e.g. Computer Science" /></div><div class="field"><label>Year level</label><input name="yearLevel" maxlength="40" value="${escapeHtml(state.profileYear)}" placeholder="e.g. Year 3" /></div><div class="field"><label>Bio</label><textarea name="bio" maxlength="180" placeholder="Tell classmates about your learning interests.">${escapeHtml(state.profileBio)}</textarea></div></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Save changes</button></div></form></div>`;
 }
 
 function shareModal(postId) {
@@ -460,10 +368,6 @@ function shareModal(postId) {
 
 function attachmentForwardModal(messageId) {
   return `<div class="modal-backdrop" data-action="close-modal"><div class="modal attachment-forward-modal" data-message-id="${escapeHtml(messageId)}"><div class="modal-head"><h2>Forward saved file</h2><button class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="share-targets">${people.map((p,i)=>`<button class="share-target" data-forward-person="${i}">${avatar(p)}<span><strong>${escapeHtml(p.name)}</strong><small>Send in chat</small></span>${icon('chevron')}</button>`).join('')}${channels.map((c,i)=>state.joined.has(i)?`<button class="share-target" data-forward-channel="${i}"><div class="channel-icon ${escapeHtml(c.cls)}">${escapeHtml(c.icon)}</div><span><strong>${escapeHtml(c.name)}</strong><small>Post in channel</small></span>${icon('chevron')}</button>`:'').join('')}</div></div></div>`;
-}
-
-function createChannelModalLegacy() {
-  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="channel-form"><div class="modal-head"><h2>Create channel</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Channel name</label><input name="name" maxlength="50" required placeholder="e.g. SQL Queries & Joins" /></div><div class="field"><label>Description</label><textarea name="description" maxlength="250" placeholder="What is this channel about? Who is it for?"></textarea></div><div class="field"><label>Course</label><select name="course"><option>Computer Science</option><option>Database Systems</option><option>Mathematics</option></select></div><div class="field"><label>Module</label><input name="module" required placeholder="e.g. SQL Joins & Constraints" /></div><div class="field"><label>Visibility</label><div class="radio-row"><div class="radio-card selected" data-visibility="Public"><strong>Public</strong><div class="muted small">Anyone can discover and join.</div></div><div class="radio-card" data-visibility="Private"><strong>Private</strong><div class="muted small">Only invited members can join.</div></div></div></div></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Create channel</button></div></form></div>`;
 }
 
 function createChannelModal() {
@@ -497,7 +401,7 @@ function render() {
 }
 
 function usageSummaryHtml(){
-  const limits={Free:{storage:100,downloads:500,saved:7},'Student+':{storage:5120,downloads:5120,saved:null},Power:{storage:20480,downloads:15360,saved:null}};
+  const limits={Free:{storage:100,downloads:100,saved:7},'Student+':{storage:5120,downloads:5120,saved:null},Power:{storage:10240,downloads:10240,saved:null}};
   const limit=limits[state.subscriptionPlan]||limits.Free;
   const storageTotal=limit.storage+state.storageAddons*1024, storageLeft=Math.max(0,storageTotal-(state.storageUsedMB||0));
   const downloadsLeft=Math.max(0,limit.downloads-(state.downloadsUsedMB||0));
@@ -527,8 +431,8 @@ document.addEventListener('click',e=>{
   const selectPlan=e.target.closest('[data-select-plan]'); if(selectPlan){if(guestNeedsSignIn('Sign in to choose a StudyLoop plan.'))return;notify('Plan activation requires verified billing setup.');return;}
   const setting=e.target.closest('[data-setting]'); if(setting){const name=setting.dataset.setting;if(name==='Notifications'){state.page='notifications';}else if(name==='Saved posts'){state.page='saved';}else if(name==='Plans & storage'){state.page='pricing';}else{state.activeSetting=name;state.page='settings';}render();return;}
   const friendTab=e.target.closest('[data-friend-tab]'); if(friendTab){state.friendTab=friendTab.dataset.friendTab;render();return;}
-  const requestAction=e.target.closest('[data-request-action]'); if(requestAction){const id=+requestAction.dataset.requestId;state.acceptedRequests.add(id);notify(requestAction.dataset.requestAction==='accept'?`${friendRequests[id].name} is now your friend`:'Friend request declined');render();return;}
-  const discoverAdd=e.target.closest('[data-discover-add]'); if(discoverAdd){const id=+discoverAdd.dataset.discoverAdd;state.sentRequests.add(id);notify(`Friend request sent to ${discoverPeople[id].name}`);render();return;}
+  const requestAction=e.target.closest('[data-request-action]'); if(requestAction){respondToFriendRequest(requestAction.dataset.requestId,requestAction.dataset.requestAction).then(()=>notify(requestAction.dataset.requestAction==='accepted'?'Friend request accepted':'Friend request declined')).catch(error=>notify(userFacingError(error,'Unable to update this request.')));return;}
+  const discoverAdd=e.target.closest('[data-discover-add]'); if(discoverAdd){const userId=discoverAdd.dataset.discoverAdd;const person=people.find(item=>item.id===userId);sendFriendRequest(state.userId,userId).then(()=>notify(`Friend request sent to ${person?.name||'this user'}`)).catch(error=>notify(userFacingError(error,'Unable to send this friend request.')));return;}
   const chat=e.target.closest('[data-chat]'); if(chat){if(guestNeedsSignIn('Sign in to read and send private messages.'))return;state.activeChat=+chat.dataset.chat;state.chatOpen=true;const selected=chats[state.activeChat];if(selected){selected.unread=0;state.unreadMessageIds.clear();}subscribeActiveMessages();render();return;}
   const savedChat=e.target.closest('[data-saved-chat]'); if(savedChat){if(guestNeedsSignIn('Sign in to access Saved Messages.'))return;state.activeChat=0;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const personChat=e.target.closest('[data-person-chat]'); if(personChat){if(guestNeedsSignIn('Sign in to message classmates.'))return;state.activeChat=+personChat.dataset.personChat+1;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
@@ -539,8 +443,8 @@ document.addEventListener('click',e=>{
   if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
   const forwardChannel=e.target.closest('[data-forward-channel]');
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
-  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(error.message||'Unable to join this channel.'));}return;}
-  const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];setMembership(state.userId,channel.id,false).then(()=>notify(`Left ${channel.name}`)).catch(error=>notify(error.message||'Unable to leave this channel.'));return;}
+  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
+  const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];if(channel.ownerId===state.userId){notify('Channel owners must remove members before leaving.');return;}setMembership(state.userId,channel.id,false).then(()=>notify(`Left ${channel.name}`)).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
   const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';render();return;}
   const deleteComment=e.target.closest('[data-delete-comment]');
   if(deleteComment){const comment=(discussionComments[state.activePost]||[]).find(item=>item.id===deleteComment.dataset.deleteComment);if(comment?.authorId!==state.userId){notify('You can only delete your own comment.');return;}if(confirm('Delete this comment?'))Promise.all([deleteCloudComment(state.activePost,comment.id),deleteUploadedAsset(comment.imageURL).catch(()=>{}),deleteUploadedAsset(comment.audioURL).catch(()=>{})]).then(()=>notify('Comment deleted')).catch(error=>notify(userFacingError(error,'Unable to delete this comment.')));return;}
@@ -561,16 +465,17 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='zoom-image'){document.body.insertAdjacentHTML('beforeend',`<div class="image-lightbox" data-action="close-modal"><img src="${action.src}" alt="Expanded attachment" /></div>`);return;}
   if(action.dataset.action==='more'&&post){const item=posts.find(p=>String(p.id)===String(post.dataset.post));const own=item&&item.authorId===state.userId;const downloadable=Boolean(safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop post-menu-backdrop" data-action="close-modal" data-post-id="${post.dataset.post}"><div class="post-menu">${downloadable?`<button class="secondary" data-action="download-post">${icon('download')} Download</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-post">Delete post</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
   if(action.dataset.action==='sign-in'){openAuthModal();return;}
-  if(action.dataset.action==='password-reset'){sendPasswordReset(state.userEmail).then(()=>notify('Password reset email sent')).catch(error=>notify(error.message||'Unable to send reset email.'));return;}
-  if(action.dataset.action==='deactivate-account'){if(!confirm('Deactivate your account? You will be signed out.'))return;deactivateUser(state.userId).then(()=>signOutUser()).then(()=>{state.isAuthenticated=false;state.userId='';state.userEmail='';state.page='landing';render();notify('Account deactivated');}).catch(error=>notify(error.message||'Unable to deactivate account.'));return;}
-  if(action.dataset.action==='logout'){signOutUser().then(()=>{state.isAuthenticated=false;state.isGuest=false;state.userId='';state.userEmail='';state.profileName='';state.profilePhotoURL='';state.page='landing';render();notify('You have been logged out');}).catch(error=>notify(error.message||'Unable to log out.'));return;}
+  if(action.dataset.action==='toggle-block-user'){const userId=action.dataset.userId;const blocked=state.blockedUsers.has(userId);setUserBlocked(state.userId,userId,!blocked).then(()=>notify(blocked?'User unblocked':'User blocked')).catch(error=>notify(userFacingError(error,'Unable to update this block.')));return;}
+  if(action.dataset.action==='password-reset'){sendPasswordReset(state.userEmail).then(()=>notify('Password reset email sent')).catch(error=>notify(userFacingError(error,'Unable to send reset email.')));return;}
+  if(action.dataset.action==='deactivate-account'){if(!confirm('Deactivate your account? You will be signed out.'))return;deactivateUser(state.userId).then(()=>signOutUser()).then(()=>{resetPrivateState();state.isAuthenticated=false;state.userId='';state.userEmail='';state.page='landing';render();notify('Account deactivated');}).catch(error=>notify(userFacingError(error,'Unable to deactivate account.')));return;}
+  if(action.dataset.action==='logout'){signOutUser().then(()=>{resetPrivateState();state.isAuthenticated=false;state.isGuest=false;state.userId='';state.userEmail='';state.profileName='';state.profilePhotoURL='';state.page='landing';render();notify('You have been logged out');}).catch(error=>notify(userFacingError(error,'Unable to log out.')));return;}
   if(action.dataset.action==='continue-guest'){document.querySelector('.auth-backdrop')?.remove();state.isGuest=true;state.page='home';state.chatOpen=false;notify('Browsing StudyLoop as a guest');render();return;}
   if(['save','share','create-channel','upload-saved','upload-file','share-saved','channel-post','add-friend','edit-profile','notifications'].includes(action.dataset.action)&&guestNeedsSignIn('Sign in to participate in StudyLoop.')) return;
-  if(action.dataset.action==='report-post'&&post){report('post',String(post.id),'User report',state.userEmail||'guest').catch(()=>{});notify('Post reported');return;}
+  if(action.dataset.action==='report-post'&&post){report('post',String(post.dataset.post),'User report',state.userId).then(()=>notify('Post reported')).catch(error=>notify(userFacingError(error,'Unable to submit this report.')));return;}
   if(action.dataset.action==='download-post'){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));const url=safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL);if(url){const link=document.createElement('a');link.href=url;link.download=item?.file?.name||'studyloop-download';link.click();}else notify('No downloadable attachment found.');menu?.remove();return;}
-  if(action.dataset.action==='delete-post'&&!post){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));if(item?.authorId===state.userId){deleteCloudPost(item.id).then(()=>{const index=posts.indexOf(item);if(index>=0)posts.splice(index,1);menu?.remove();render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));}return;}
-  if(action.dataset.action==='delete-post'&&post&&post.author===state.profileName){const index=posts.findIndex(item=>item.id===post.id);if(index>=0)posts.splice(index,1);deleteCloudPost(post.id).catch(()=>{});state.page='home';render();return;}
-  if(action.dataset.action==='upload-saved'||action.dataset.action==='upload-file'){const input=$('#file-upload');input.accept='image/jpeg,image/png,image/webp,audio/*,application/pdf';input.click();return;}
+  if(action.dataset.action==='delete-post'&&!post){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));if(item?.authorId===state.userId){deletePostAndAttachments(item).then(()=>{const index=posts.indexOf(item);if(index>=0)posts.splice(index,1);menu?.remove();render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));}return;}
+  if(action.dataset.action==='delete-post'&&post){const item=posts.find(entry=>String(entry.id)===String(post.dataset.post));if(item?.authorId===state.userId)deletePostAndAttachments(item).then(()=>{state.page='home';render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));return;}
+  if(action.dataset.action==='upload-saved'||action.dataset.action==='upload-file'){const input=$('#file-upload');input.accept='image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/webm,application/pdf';input.dataset.destination=state.page==='messages'&&state.activeChat!==0?'chat':'saved';input.click();return;}
   if(action.dataset.action==='channel-post'){state.recordedAudio=null;document.body.insertAdjacentHTML('beforeend',postComposerModal());return;}
   if(action.dataset.action==='record-voice'){
     if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
@@ -627,12 +532,57 @@ document.addEventListener('input',e=>{
 });
 
 document.addEventListener('submit',async e=>{
-  if(e.target.id==='auth-form'){e.preventDefault();const data=new FormData(e.target);if(state.authMode==='signup'&&!data.get('terms')){notify('Accept the Terms & Conditions to create your account.');return;}try{const user=state.authMode==='signup'?await signUp(data.get('username'),data.get('email'),data.get('password')):await signIn(data.get('email'),data.get('password'));state.userEmail=user.email;applyTestEntitlement(user.email);state.profileName=state.authMode==='signup'?data.get('username'):state.profileName;state.isGuest=false;state.isAuthenticated=true;$('.auth-backdrop')?.remove();state.page='home';state.chatOpen=false;notify('Signed in successfully');render();}catch(error){notify(userFacingError(error,'Unable to sign in.'));}}
-  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input.value.trim();if(!value&&!state.chatAudio)return;const participants=state.activeChat===0?[state.userId]:[state.userId,people[state.activeChat-1]?.id].filter(Boolean);try{if(state.chatAudio){const name=`voice-${Date.now()}.webm`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'attachment',text:'Voice note',file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url}});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';}if(value)await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'text',text:value});input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
-  if(e.target.id==='channel-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to create a channel.'))return;const data=new FormData(e.target);const submit=e.target.querySelector('button.primary');submit.disabled=true;try{const channel={name:data.get('name').trim(),course:data.get('course').trim(),sub:data.get('module').trim(),access:'Public',desc:data.get('description').trim(),icon:data.get('name').trim().slice(0,2).toUpperCase(),cls:'',members:1,ownerId:state.userId};const id=await createCloudChannel(channel);const localChannel={...channel,id};const cached=JSON.parse(localStorage.getItem(`studyloop_channels_${state.userId}`)||'[]');localStorage.setItem(`studyloop_channels_${state.userId}`,JSON.stringify([...cached.filter(item=>item.id!==id),localChannel]));channels.push(localChannel);await setMembership(state.userId,id,true);$('.modal-backdrop').remove();state.page='channels';notify('Channel created');render();}catch(error){notify(userFacingError(error,'Unable to create this channel.'));submit.disabled=false;}}
-  if(e.target.id==='post-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to publish a post.'))return;const data=new FormData(e.target);const text=data.get('postText').trim();const assets=data.getAll('assets').filter(file=>file instanceof File&&file.size);if(assets.some(file=>file.size>50*1024*1024)){notify('Each upload must be 50 MB or smaller.');return;}if(!text&&!assets.length&&!state.recordedAudio){notify('Add text, an attachment, or a voice note before publishing.');return;}const submit=e.target.querySelector('button.primary');submit.disabled=true;submit.textContent='Publishing…';document.querySelector('.modal-backdrop')?.remove();notify('Publishing post…');try{const channel=channels[state.activeChannel]||channels[0];const id=String(Date.now());const image=assets.find(file=>file.type.startsWith('image/'));const audio=state.recordedAudio||assets.find(file=>file.type.startsWith('audio/'));const documentFile=assets.find(file=>file.type==='application/pdf');const [imageURL,audioURL,fileURL]=await Promise.all([image?uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`):null,audio?uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audio.type.includes('ogg')?'ogg':'webm'}`):null,documentFile?uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`):null]);const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,url:fileURL}:undefined};posts.unshift(post);await saveCloudPost(post,state.userId);state.recordedAudio=null;$('.modal-backdrop').remove();state.page='channel-detail';state.channelTab='posts';render();notify('Post published');}catch(error){notify(error.message||'Unable to publish your post.');submit.disabled=false;submit.textContent='Publish post';}}
+  if(e.target.id==='auth-form'){e.preventDefault();const data=new FormData(e.target);if(state.authMode==='signup'&&!data.get('terms')){notify('Accept the Terms & Conditions to create your account.');return;}try{const user=state.authMode==='signup'?await signUp(data.get('username'),data.get('email'),data.get('password')):await signIn(data.get('email'),data.get('password'));state.userEmail=user.email;await loadAccountEntitlement(user.uid);state.profileName=state.authMode==='signup'?String(data.get('username')||'').trim():state.profileName;state.isGuest=false;state.isAuthenticated=true;$('.auth-backdrop')?.remove();state.page='home';state.chatOpen=false;notify('Signed in successfully');render();}catch(error){notify(userFacingError(error,'Unable to sign in.'));}}
+  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input.value.trim();if(!value&&!state.chatAudio)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];try{if(peer&&!relationFor(peer.id))await sendFriendRequest(state.userId,peer.id).catch(error=>{if(error?.code!=='permission-denied')throw error;});if(state.chatAudio){const name=`voice-${Date.now()}.webm`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'attachment',text:'Voice note',file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url}});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';}if(value)await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'text',text:value});input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
+  if(e.target.id==='channel-form'){
+    e.preventDefault();
+    if(guestNeedsSignIn('Sign in to create a channel.'))return;
+    const data=new FormData(e.target);
+    const submit=e.target.querySelector('button.primary');
+    submit.disabled=true;
+    try{
+      const access=e.target.querySelector('[data-visibility].selected')?.dataset.visibility||'Public';
+      if(access==='Private'&&state.subscriptionPlan==='Free'){notify('Private channels require Student+ or Power.');submit.disabled=false;return;}
+      const channel={name:String(data.get('name')||'').trim(),course:String(data.get('course')||'').trim(),sub:String(data.get('module')||'').trim(),access,desc:String(data.get('description')||'').trim(),icon:String(data.get('name')||'').trim().slice(0,2).toUpperCase(),cls:'',members:1,ownerId:state.userId};
+      const id=await createCloudChannel(channel);
+      const localChannel={...channel,id};
+      if(!channels.some(item=>item.id===id))channels.push(localChannel);
+      $('.modal-backdrop')?.remove();
+      state.page='channels';
+      render();
+      try{
+        await setMembership(state.userId,id,true);
+        notify('Channel created');
+      }catch(membershipError){
+        console.warn('Channel created; creator membership sync failed.',membershipError);
+        notify('Channel created. Membership is still syncing.');
+      }
+    }catch(error){
+      notify(userFacingError(error,'Unable to create this channel.'));
+      submit.disabled=false;
+    }
+  }
+  if(e.target.id==='post-form'){
+    e.preventDefault();if(guestNeedsSignIn('Sign in to publish a post.'))return;
+    const data=new FormData(e.target);const text=String(data.get('postText')||'').trim();const assets=data.getAll('assets').filter(file=>file instanceof File&&file.size);
+    const safeTypes=new Set(['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm','application/pdf']);
+    if(assets.length>3||assets.some(file=>file.size>50*1024*1024||!safeTypes.has(file.type))){notify('Use up to one image, one audio file, and one PDF, each 50 MB or smaller.');return;}
+    if(!text&&!assets.length&&!state.recordedAudio){notify('Add text, an attachment, or a voice note before publishing.');return;}
+    const channel=channels[state.activeChannel];if(!channel||!state.joined.has(state.activeChannel)){notify('Join this channel before publishing.');return;}
+    const submit=e.target.querySelector('button.primary');submit.disabled=true;submit.textContent='Publishing…';document.querySelector('.modal-backdrop')?.remove();notify('Publishing post…');
+    const uploaded=[];
+    try{
+      const id=crypto.randomUUID();const image=assets.find(file=>file.type.startsWith('image/'));const audio=state.recordedAudio||assets.find(file=>file.type.startsWith('audio/')||file.type==='video/webm');const documentFile=assets.find(file=>file.type==='application/pdf');
+      let imageURL=null,audioURL=null,fileURL=null;
+      if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
+      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audio.type.includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
+      if(documentFile){fileURL=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(fileURL);}
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
+      await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
+    }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(userFacingError(error,'Unable to publish your post.'));}
+  }
   if(e.target.id==='comment-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to comment on this discussion.'))return;const data=new FormData(e.target);const text=String(data.get('comment')||'').trim();const image=data.get('commentImage');if(!text&&!(image instanceof File&&image.size)&&!state.commentAudio){notify('Add text, a picture, or a voice note.');return;}try{const postId=String(state.activePost);const commentId=String(Date.now());const [imageURL,audioURL]=await Promise.all([image instanceof File&&image.size?uploadAsset(image,`users/${state.userId}/comments/${postId}/${commentId}-${safeStorageName(image)}`):null,state.commentAudio?uploadAsset(new File([state.commentAudio],`${commentId}.webm`,{type:state.commentAudio.type}),`users/${state.userId}/comments/${postId}/${commentId}.webm`):null]);await saveCloudComment(postId,{authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId:state.replyToCommentId||null});state.commentAudio=null;state.replyToCommentId=null;e.target.reset();notify('Comment posted');}catch(error){notify(userFacingError(error,'Unable to post this comment.'));}}
-  if(e.target.id==='profile-form'){e.preventDefault();const data=new FormData(e.target);const save=e.target.querySelector('button.primary');save.disabled=true;save.textContent='Saving…';try{const photo=data.get('profilePhoto');const profile={username:data.get('displayName').trim(),bio:data.get('bio').trim(),course:data.get('course').trim(),yearLevel:data.get('yearLevel').trim(),photoURL:state.profilePhotoURL};if(photo instanceof File&&photo.size)profile.photoURL=await uploadAsset(photo,`users/${state.userId}/profile/${safeStorageName(photo)}`);await updateUserProfile(state.userId,profile);applyProfile(profile);$('.modal-backdrop')?.remove();render();notify('Profile updated');}catch(error){notify(error.message||'Unable to save your profile.');save.disabled=false;save.textContent='Save changes';}}
+  if(e.target.id==='profile-form'){e.preventDefault();const data=new FormData(e.target);const save=e.target.querySelector('button.primary');const photo=data.get('profilePhoto');if(photo instanceof File&&photo.size&&(photo.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(photo.type))){notify('Choose a JPEG, PNG, or WebP image up to 10 MB.');return;}save.disabled=true;save.textContent='Saving…';try{const profile={username:data.get('displayName').trim(),bio:data.get('bio').trim(),course:data.get('course').trim(),yearLevel:data.get('yearLevel').trim(),photoURL:state.profilePhotoURL};if(photo instanceof File&&photo.size)profile.photoURL=await uploadAsset(photo,`users/${state.userId}/profile/${safeStorageName(photo)}`);await updateUserProfile(state.userId,profile);applyProfile(profile);$('.modal-backdrop')?.remove();render();notify('Profile updated');}catch(error){notify(userFacingError(error,'Unable to save your profile.'));save.disabled=false;save.textContent='Save changes';}}
 });
 
 document.addEventListener('input',e=>{if(e.target.id==='people-search'){state.peopleSearch=e.target.value;render();}});
@@ -640,31 +590,29 @@ document.addEventListener('change',async e=>{
   if(e.target.id!=='file-upload')return;
   e.stopImmediatePropagation();
   const file=e.target.files?.[0]; if(!file)return;
-  const allowed=file.type==='application/pdf'||file.type.startsWith('image/')||file.type.startsWith('audio/');
+  const allowed=['application/pdf','image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm'].includes(file.type);
   if(!allowed){notify('Choose a PDF, image, or audio file. HTML and executable files are not allowed.');e.target.value='';return;}
   if(file.size>50*1024*1024){notify('Files must be 50 MB or smaller.');e.target.value='';return;}
   const size=file.size<1024*1024?`${Math.max(1,Math.round(file.size/1024))} KB`:`${(file.size/(1024*1024)).toFixed(1)} MB`;
   try {
+    const destination=e.target.dataset.destination||'saved';
+    const peer=destination==='chat'?people[state.activeChat-1]:null;
+    const participants=peer?[state.userId,peer.id]:[state.userId];
     const storedName=`${Date.now()}-${safeStorageName(file)}`;
-    const url=await uploadAsset(file,`users/${state.userId}/saved/${storedName}`);
-    await saveCloudMessage({conversationId:`saved_${state.userId}`,participants:[state.userId],senderId:state.userId,type:'attachment',text:'Saved a file',file:{name:file.name,meta:size,type:file.type,url}});
-    notify('File saved to Saved Messages');
+    const folder=peer?'messages':'saved';
+    const url=await uploadAsset(file,`users/${state.userId}/${folder}/${storedName}`);
+    if(peer&&!relationFor(peer.id))await sendFriendRequest(state.userId,peer.id).catch(()=>{});
+    await saveCloudMessage({conversationId:peer?[state.userId,peer.id].sort().join('_'):`saved_${state.userId}`,participants,senderId:state.userId,type:'attachment',text:peer?'Shared a file':'Saved a file',file:{name:file.name,meta:size,type:file.type,url}});
+    notify(peer?'File sent':'File saved to Saved Messages');
   } catch(error) { notify(userFacingError(error,'Unable to save this file.')); }
-  finally { e.target.value=''; }
+  finally { e.target.value='';delete e.target.dataset.destination; }
 },true);
 
-document.addEventListener('change',async e=>{
+document.addEventListener('change',e=>{
   if(e.target.matches('#auth-form input[name="terms"]')){
     const submit=e.target.form.querySelector('.auth-submit');
     submit.disabled=!e.target.checked;
     submit.setAttribute('aria-disabled',String(!e.target.checked));
-    return;
-  }
-  if(e.target.id==='file-upload'){
-    const file=e.target.files?.[0]; if(!file)return;
-    const size=file.size<1024*1024?`${Math.max(1,Math.round(file.size/1024))} KB`:`${(file.size/(1024*1024)).toFixed(1)} MB`;
-    const chat=chats[state.activeChat]||chats[0];
-    try { const url=await uploadAsset(file,`users/${state.userId}/saved/${safeStorageName(file)}`); chat.messages.push(['mine',`File uploaded: ${file.name} · ${size} (${url})`,'Now']); chat.preview=`Uploaded ${file.name}`; notify('File saved'); } catch(error) { notify(error.message||'Unable to upload your file.'); } finally { e.target.value=''; render(); }
   }
 });
 
@@ -672,13 +620,22 @@ document.addEventListener('click',e=>{
   const radio=e.target.closest('[data-visibility]');if(radio){$$('.radio-card').forEach(x=>x.classList.remove('selected'));radio.classList.add('selected');}
 });
 
-let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments;
+let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopFriendRequests, stopBlocks;
+let currentAuthUid='';
+function disconnectUserSubscriptions() {
+  for(const stop of [stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopFriendRequests,stopBlocks])stop?.();
+  stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopFriendRequests=stopBlocks=undefined;
+}
+function resetPrivateState() {
+  disconnectUserSubscriptions();
+  currentAuthUid='';inboxMessages=[];state.relations=[];state.blockedUsers=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';chats.splice(0);people.splice(0);notifications.splice(0);
+}
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>(state.memberChannelIds.has(channel.id)||channel.ownerId===state.userId)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
   stopActiveMessages?.();
   const conversationId=conversationIdFor();
   if(!conversationId)return;
-  try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Now';const mapped=messages.map(message=>{const side=message.senderId===state.userId?'mine':'theirs';if(message.type==='postLink')return{id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId};if(message.type==='savedPost'||message.type==='forwardedPost')return{id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post};if(message.type==='attachment')return{id:message.id,type:'attachment',side,time:timeOf(message),file:message.file};return[side,message.text||'',timeOf(message),message.id];});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
+  try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);const mapped=messages.map(message=>{const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);if(message.type==='postLink')return{id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen};if(message.type==='savedPost'||message.type==='forwardedPost')return{id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen};if(message.type==='attachment')return{id:message.id,type:'attachment',side,time:timeOf(message),file:message.file,seen};return[side,message.text||'',timeOf(message),message.id,seen];});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
 }
 
 function showApkPrompt() {
@@ -689,19 +646,24 @@ async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveCo
 async function connectFirebase() {
   try {
     stopCloudPosts=await observePosts(cloudPosts => { posts.splice(0,posts.length,...cloudPosts.map(post => ({ ...post, id:String(post.id), ago:post.ago||'just now', comments:post.comments||0 }))); render(); }, error => console.warn('Unable to load posts', error));
-    stopCloudChannels=await observeChannels(cloudChannels => { const normalized=cloudChannels.map(channel=>({ icon:channel.icon||'SL', cls:channel.cls||'', access:channel.access||'Public', members:channel.members||0, desc:channel.desc||'', sub:channel.sub||'', ...channel }));const cached=state.userId?JSON.parse(localStorage.getItem(`studyloop_channels_${state.userId}`)||'[]'):[];const ids=new Set(normalized.map(channel=>channel.id));const merged=[...normalized,...cached.filter(channel=>!ids.has(channel.id))];channels.splice(0,channels.length,...merged);syncJoinedChannels(); render(); }, error => { console.warn('Unable to load channels', error);notify('Unable to load channels. Check your connection and Firebase configuration.'); });
+    stopCloudChannels=await observeChannels(cloudChannels => { const normalized=cloudChannels.map(channel=>({ icon:channel.icon||'SL', cls:channel.cls||'', access:channel.access||'Public', members:channel.members||0, desc:channel.desc||'', sub:channel.sub||'', ...channel }));channels.splice(0,channels.length,...normalized);syncJoinedChannels(); render(); }, error => { console.warn('Unable to load channels', error);notify('Unable to load channels. Check your connection and Firebase configuration.'); });
     await observeAuth(async user => {
       if (!user) {
-        if (!state.isGuest) { state.isAuthenticated=false; state.userId=''; state.userEmail=''; }
+        resetPrivateState();
+        if (!state.isGuest) { state.isAuthenticated=false; state.userId=''; state.userEmail='';state.profileName='';state.profilePhotoURL=''; }
+        render();
         return;
       }
-      state.isAuthenticated=true; state.isGuest=false; state.userId=user.uid; state.userEmail=user.email||''; applyTestEntitlement(state.userEmail);
-      const cachedChannels=JSON.parse(localStorage.getItem(`studyloop_channels_${state.userId}`)||'[]');if(cachedChannels.length){const known=new Set(channels.map(channel=>channel.id));channels.push(...cachedChannels.filter(channel=>!known.has(channel.id)));syncJoinedChannels();}
-      try { applyProfile(await getUserProfile(user.uid)); } catch (error) { console.warn('Unable to load profile', error); }
+      if(currentAuthUid&&currentAuthUid!==user.uid)resetPrivateState();
+      currentAuthUid=user.uid;state.isAuthenticated=true; state.isGuest=false; state.userId=user.uid; state.userEmail=user.email||'';
+      try { const profile=await waitForUserProfile(user.uid);if(!profile){notify('Your account profile could not be loaded. Please sign in again.');await signOutUser();return;}if(profile.deactivated){await signOutUser();notify('This account has been deactivated.');return;}applyProfile(profile); } catch (error) { console.warn('Unable to load profile', error);await signOutUser();return; }
+      await loadAccountEntitlement(user.uid);
       if (!stopCloudUsers) stopCloudUsers=await observeUsers(users => { people.splice(0,people.length,...users.filter(profile=>profile.id!==state.userId).map(profile=>({ id:profile.id, initials:initials(profile.username||'Student'), name:profile.username||'Student', info:[profile.course,profile.yearLevel].filter(Boolean).join(' · '), status:profile.bio||'', photoURL:profile.photoURL||'' }))); friendRequests.splice(0);discoverPeople.splice(0,discoverPeople.length,...people);notifications.splice(0);syncChats(); render(); }, error=>console.warn('Unable to load users',error));
       if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();render();},error=>console.warn('Unable to load message notifications',error));
       if (!stopCloudMemberships) stopCloudMemberships=await observeMemberships(user.uid, ids=>{state.memberChannelIds=new Set(ids);syncJoinedChannels();render();}, error=>console.warn('Unable to load memberships',error));
       if (!stopCloudSaved) stopCloudSaved=await observeSaved(user.uid, ids=>{state.saved=new Set(ids);render();}, error=>console.warn('Unable to load saved posts',error));
+      if (!stopFriendRequests) stopFriendRequests=await observeFriendRequests(user.uid,relations=>{state.relations=relations;render();},error=>console.warn('Unable to load friend requests',error));
+      if (!stopBlocks) stopBlocks=await observeBlocks(user.uid,ids=>{state.blockedUsers=new Set(ids);render();},error=>console.warn('Unable to load blocks',error));
       if (state.page==='landing') state.page='home';
       render();
     });
@@ -711,6 +673,11 @@ async function connectFirebase() {
 render();
 connectFirebase();
 setTimeout(showApkPrompt, 1200);
-if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+
+if ('serviceWorker' in navigator && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
+  navigator.serviceWorker.getRegistrations().then(registrations => registrations.forEach(registration => registration.unregister())).catch(() => {});
+  if ('caches' in window) caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('studyloop-')).map(key => caches.delete(key)))).catch(() => {});
 }

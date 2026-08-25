@@ -2,46 +2,61 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
+    function activeRequester() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false;
+    }
+    function owns(userId) { return activeRequester() && request.auth.uid == userId; }
+    function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }
+    function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm']; }
+    function safeStudyFile() { return safeImage() || safeAudio() || request.resource.contentType == 'application/pdf'; }
+
     match /users/{userId}/profile/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 10 * 1024 * 1024
-        && request.resource.contentType.matches('image/(jpeg|png|webp)')
+      allow read: if true;
+      allow create: if owns(userId)
+        && request.resource.size <= 10 * 1024 * 1024
+        && safeImage()
         && fileName.matches('[A-Za-z0-9._-]{1,120}');
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if owns(userId);
+      allow update: if false;
     }
     match /users/{userId}/saved/{fileName} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 50 * 1024 * 1024
-        && request.resource.contentType.matches('(image|audio)/.*|application/pdf')
+      allow read: if owns(userId);
+      allow create: if owns(userId)
+        && request.resource.size <= 50 * 1024 * 1024
+        && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if owns(userId);
+      allow update: if false;
     }
     match /users/{userId}/posts/{postId}/{fileName} {
       allow read: if resource != null
-        && resource.contentType.matches('(image|audio)/.*|application/pdf');
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 50 * 1024 * 1024
-        && request.resource.contentType.matches('(image|audio)/.*|application/pdf')
+        && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm','application/pdf'];
+      allow create: if owns(userId)
+        && request.resource.size <= 50 * 1024 * 1024
+        && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if owns(userId);
+      allow update: if false;
     }
     match /users/{userId}/messages/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 50 * 1024 * 1024
-        && request.resource.contentType.matches('(image|audio)/.*|application/pdf')
+      allow read: if activeRequester();
+      allow create: if owns(userId)
+        && request.resource.size <= 50 * 1024 * 1024
+        && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if owns(userId);
+      allow update: if false;
     }
     match /users/{userId}/comments/{postId}/{fileName} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == userId
-        && request.resource.size < 50 * 1024 * 1024
-        && request.resource.contentType.matches('(image|audio)/.*')
+      allow create: if owns(userId)
+        && request.resource.size <= 50 * 1024 * 1024
+        && (safeImage() || safeAudio())
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if owns(userId);
+      allow update: if false;
     }
   }
 }
