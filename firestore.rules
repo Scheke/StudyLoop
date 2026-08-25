@@ -52,6 +52,30 @@ service cloud.firestore {
         && !exists(/databases/$(database)/documents/blocks/$(messagePeer(data) + '_' + request.auth.uid))
       );
     }
+    function ratePath(action) {
+      return /databases/$(database)/documents/rateLimits/$(request.auth.uid + '_' + action);
+    }
+    function rateConsumed(action, maxCount, windowDuration) {
+      let path = ratePath(action);
+      let after = getAfter(path).data;
+      return after.uid == request.auth.uid
+        && after.action == action
+        && after.updatedAt == request.time
+        && after.count <= maxCount
+        && (
+          (!exists(path)
+            && after.count == 1
+            && after.windowStartedAt == request.time)
+          || (exists(path) && (
+            (request.time < get(path).data.windowStartedAt + windowDuration
+              && after.windowStartedAt == get(path).data.windowStartedAt
+              && after.count == get(path).data.count + 1)
+            || (request.time >= get(path).data.windowStartedAt + windowDuration
+              && after.windowStartedAt == request.time
+              && after.count == 1)
+          ))
+        );
+    }
 
     match /users/{userId} {
       allow read: if (signedIn() && request.auth.uid == userId) || admin();
@@ -108,7 +132,8 @@ service cloud.firestore {
 
     match /posts/{postId} {
       allow read: if true;
-      allow create: if activeUser() && request.resource.data.authorId == request.auth.uid
+      allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
+        && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','file','createdAt'])
         && request.resource.data.channelId is string
         && channelExists(request.resource.data.channelId)
@@ -170,7 +195,7 @@ service cloud.firestore {
 
     match /posts/{postId}/comments/{commentId} {
       allow read: if true;
-      allow create: if activeUser()
+      allow create: if activeUser() && rateConsumed('comment', 15, duration.value(60, 's'))
         && exists(/databases/$(database)/documents/posts/$(postId))
         && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['authorId','author','authorPhotoURL','text','imageURL','audioURL','parentId','createdAt'])
@@ -220,7 +245,8 @@ service cloud.firestore {
     }
 
     match /messages/{messageId} {
-      allow create: if activeUser() && request.auth.uid == request.resource.data.senderId
+      allow create: if activeUser() && rateConsumed('message', 20, duration.value(60, 's'))
+        && request.auth.uid == request.resource.data.senderId
         && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','postId','file','seenBy','createdAt'])
         && validMessageParticipants(request.resource.data)
         && messagingAllowed(request.resource.data)
@@ -269,7 +295,7 @@ service cloud.firestore {
       allow read: if activeUser() && (
         resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid
       );
-      allow create: if activeUser()
+      allow create: if activeUser() && rateConsumed('friendRequest', 10, duration.value(3600, 's'))
         && request.resource.data.keys().hasOnly(['senderId','receiverId','status','createdAt','updatedAt'])
         && request.resource.data.senderId == request.auth.uid
         && request.resource.data.receiverId is string
@@ -320,7 +346,7 @@ service cloud.firestore {
     }
 
     match /reports/{reportId} {
-      allow create: if activeUser()
+      allow create: if activeUser() && rateConsumed('report', 5, duration.value(3600, 's'))
         && request.resource.data.keys().hasOnly(['type','targetId','reason','userId','createdAt'])
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.createdAt == request.time
@@ -332,6 +358,31 @@ service cloud.firestore {
 
     match /admin/{document=**} {
       allow read, write: if admin();
+    }
+
+    match /rateLimits/{rateId} {
+      allow read: if activeUser() && rateId in [
+        request.auth.uid + '_message',
+        request.auth.uid + '_post',
+        request.auth.uid + '_comment',
+        request.auth.uid + '_friendRequest',
+        request.auth.uid + '_report'
+      ];
+      allow create, update: if activeUser()
+        && rateId == request.auth.uid + '_' + request.resource.data.action
+        && request.resource.data.keys().hasOnly(['uid','action','count','windowStartedAt','updatedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.count is int
+        && request.resource.data.count > 0
+        && request.resource.data.action in ['message','post','comment','friendRequest','report']
+        && (
+          (request.resource.data.action == 'message' && rateConsumed('message', 20, duration.value(60, 's')))
+          || (request.resource.data.action == 'post' && rateConsumed('post', 5, duration.value(60, 's')))
+          || (request.resource.data.action == 'comment' && rateConsumed('comment', 15, duration.value(60, 's')))
+          || (request.resource.data.action == 'friendRequest' && rateConsumed('friendRequest', 10, duration.value(3600, 's')))
+          || (request.resource.data.action == 'report' && rateConsumed('report', 5, duration.value(3600, 's')))
+        );
+      allow delete: if false;
     }
   }
 }

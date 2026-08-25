@@ -9,8 +9,9 @@ service firebase.storage {
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
     function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }
-    function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm']; }
-    function safeStudyFile() { return safeImage() || safeAudio() || request.resource.contentType == 'application/pdf'; }
+    function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm']; }
+    function safeDocument() { return request.resource.contentType in ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain']; }
+    function safeStudyFile() { return safeImage() || safeAudio() || safeDocument(); }
 
     match /users/{userId}/profile/{fileName} {
       allow read: if true;
@@ -32,7 +33,7 @@ service firebase.storage {
     }
     match /users/{userId}/posts/{postId}/{fileName} {
       allow read: if resource != null
-        && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm','application/pdf'];
+        && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
       allow create: if owns(userId)
         && request.resource.size <= 50 * 1024 * 1024
         && safeStudyFile()

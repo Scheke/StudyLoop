@@ -7,6 +7,14 @@ const logo = () => `<img class="brand-logo" src="/studyloop-logo.png" alt="Study
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[character]));
 const safeAssetUrl = value => /^https:\/\/firebasestorage\.googleapis\.com\//i.test(String(value||'')) ? escapeHtml(value) : '';
 const safeStorageName = file => `${crypto.randomUUID()}${(String(file?.name||'').match(/\.[a-z0-9]{1,8}$/i)||[''])[0].toLowerCase()}`;
+const IMAGE_TYPES = ['image/jpeg','image/png','image/webp'];
+const AUDIO_TYPES = ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm'];
+const DOCUMENT_TYPES = ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
+const ALLOWED_UPLOAD_TYPES = new Set([...IMAGE_TYPES,...AUDIO_TYPES,...DOCUMENT_TYPES]);
+const UPLOAD_ACCEPT = [...ALLOWED_UPLOAD_TYPES].join(',');
+const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase();
+const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
+const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
 let activeRecorder;
 let activeRecordingStream;
 let recordingTimer;
@@ -85,7 +93,15 @@ function applyInboxMessages() {
     if(!isOpen){chat.unread=(chat.unread||0)+1;state.unreadMessageIds.add(message.id);}
   }
   const existing=new Set(notifications.map(item=>item.messageId).filter(Boolean));
-  for(const message of incoming.slice(-20)){if(existing.has(message.id))continue;const peer=people.find(person=>person.id===message.senderId);if(!peer)continue;notifications.unshift({id:`message-${message.id}`,messageId:message.id,icon:'chat',title:`New message from ${peer.name}`,body:message.type==='attachment'?'Sent you a file':message.type==='postLink'?'Shared a post with you':message.text||'New message',createdAt:message.createdAt});}
+  for(const message of incoming.slice(-20)){
+    if(existing.has(message.id))continue;
+    const peer=people.find(person=>person.id===message.senderId);if(!peer)continue;
+    const sentAt=message.createdAt?.toMillis?.()||Date.now();
+    const recent=notifications.find(item=>item.senderId===message.senderId&&sentAt-(item.createdAt?.toMillis?.()||item.createdAtMs||0)<60_000);
+    if(recent){recent.count=(recent.count||1)+1;recent.messageId=message.id;recent.body=`${recent.count} new messages`;recent.createdAt=message.createdAt;recent.createdAtMs=sentAt;continue;}
+    notifications.unshift({id:`message-${message.id}`,messageId:message.id,senderId:message.senderId,count:1,icon:'chat',title:`New message from ${peer.name}`,body:message.type==='attachment'?'Sent you a file':message.type==='postLink'?'Shared a post with you':message.text||'New message',createdAt:message.createdAt,createdAtMs:sentAt});
+  }
+  if(notifications.length>20)notifications.splice(20);
 }
 function notify(message) { const t=$('#toast'); t.textContent=message; t.classList.add('show'); clearTimeout(notify.timer); notify.timer=setTimeout(()=>t.classList.remove('show'),2200); }
 function relativeTime(value) {
@@ -113,6 +129,8 @@ function userFacingError(error, fallback='Something went wrong.') {
     'storage/quota-exceeded':'Storage is temporarily unavailable. Try again later.',
     'auth/too-many-requests':'Too many attempts. Try again later.',
     'auth/network-request-failed':'Check your internet connection and try again.',
+    'app/rate-limited':'You’re doing that too quickly. Please wait and try again.',
+    'app/not-authorized':'Sign in again before trying this action.',
     'account/deactivated':'This account has been deactivated.'
   };
   return messages[code]||fallback;
@@ -201,7 +219,7 @@ function savedPage() {
 }
 
 function profilePage() {
-  const accountRows=[['user','Personal information'],['bell','Notifications'],['bookmark','Saved posts'],['grid','Plans & storage'],['users','Privacy & security']];
+  const accountRows=[['user','Personal information'],['bell','Notifications'],['bookmark','Saved posts'],['grid','Plans & storage'],['download','Install StudyLoop'],['users','Privacy & security']];
   const studyLine=[state.profileCourse,state.profileYear].filter(Boolean).join(' · ')||'Add your course and year level';
   const friendCount=state.relations.filter(relation=>relation.status==='accepted').length;
   return shell(`<div class="stack"><section class="card profile-hero">${currentUserAvatar()}<div><h2>${escapeHtml(state.profileName)}</h2><div class="muted">${escapeHtml(studyLine)}</div><p>${escapeHtml(state.profileBio||'Tell classmates a little about yourself.')}</p></div><button class="secondary" style="margin-left:auto" data-action="edit-profile">Edit profile</button></section><div class="stat-row"><div class="stat"><strong>${friendCount}</strong><span>Friends</span></div><div class="stat"><strong>${state.joined.size}</strong><span>Channels</span></div><div class="stat"><strong>${state.saved.size}</strong><span>Saved</span></div></div><section class="card section-card"><div class="section-title"><h3>Account</h3></div>${accountRows.map(r=>`<button class="settings-row" data-setting="${escapeHtml(r[1])}">${icon(r[0])}<span>${escapeHtml(r[1])}</span>${icon('chevron','i-right')}</button>`).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
@@ -220,7 +238,8 @@ function settingsPage() {
     'Privacy & security':'Control who can find you and how your account stays secure.',
   }[setting]||'Manage this area of your account.';
   const securityActions=setting==='Privacy & security'?`<button class="secondary" data-action="password-reset">Send password reset email</button><button class="secondary danger-action" data-action="deactivate-account">Deactivate account</button>`:'';
-  return shell(`<div class="stack"><button class="back-link" data-nav="profile">${icon('arrow')} Back to profile</button><section class="card section-card"><h2 style="margin:0">${escapeHtml(setting)}</h2><p class="muted">${escapeHtml(copy)}</p><div class="settings-row">${icon('check')}<span>${setting==='Privacy & security'?'Profile visible to university members':escapeHtml(state.profileName)}</span></div><div class="settings-row">${icon('bell')}<span>${setting==='Privacy & security'?'Login alerts enabled':escapeHtml(state.userEmail||'No email loaded')}</span></div>${securityActions}</section></div>`,setting,false);
+  const installAction=setting==='Install StudyLoop'?`<div class="install-settings-card"><img src="/studyloop-logo.png" alt="StudyLoop" /><div><strong>StudyLoop for Android</strong><p class="muted">Install the mobile app for a faster experience.</p><a class="primary apk-download" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div>`:'';
+  return shell(`<div class="stack"><button class="back-link" data-nav="profile">${icon('arrow')} Back to profile</button><section class="card section-card"><h2 style="margin:0">${escapeHtml(setting)}</h2><p class="muted">${escapeHtml(copy)}</p>${installAction}<div class="settings-row">${icon('check')}<span>${setting==='Privacy & security'?'Profile visible to university members':escapeHtml(state.profileName)}</span></div><div class="settings-row">${icon('bell')}<span>${setting==='Privacy & security'?'Login alerts enabled':escapeHtml(state.userEmail||'No email loaded')}</span></div>${securityActions}</section></div>`,setting,false);
 }
 
 // Updated feed view: channel attribution is intentionally prominent on every post.
@@ -353,8 +372,7 @@ function notificationsPage() {
 function postComposerModal() {
   const channel=channels[state.activeChannel]||channels[0];
   const displayChannelName=escapeHtml(channel.name);
-  const premium=true;
-  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="post-form"><div class="modal-head"><div><h2>New post</h2><p class="muted" style="margin:4px 0 0">Posting in #${displayChannelName}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="field"><label>Text</label><textarea name="postText" maxlength="1000" placeholder="Ask a question, share a note, or start a discussion…"></textarea></div>${premium?`<div class="field"><label>Attachments</label><input type="file" name="assets" multiple accept="image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/webm,application/pdf" /><span class="muted small">You can combine text, an image, a file, and a voice note.</span></div><div class="voice-recorder"><button type="button" class="secondary" data-action="record-voice">${icon('chat')} Record voice note</button><span class="muted small" id="voice-status">Not recording</span><audio id="voice-preview" controls hidden></audio></div>`:`<div class="card" style="padding:12px;background:var(--tg-blue-pale);color:var(--tg-blue-dark)">All accounts can publish text, images, files, and voice notes. Each upload is limited to 50 MB.</div>`}<div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Publish post</button></div></form></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="post-form"><div class="modal-head"><div><h2>New post</h2><p class="muted" style="margin:4px 0 0">Posting in #${displayChannelName}</p></div><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="field"><label>Text</label><textarea name="postText" maxlength="1000" placeholder="Ask a question, share a note, or start a discussion…"></textarea></div><div class="field"><label>Attachments</label><input type="file" name="assets" multiple accept="${UPLOAD_ACCEPT}" /><span class="muted small">Add one image, one document, and one audio file. Videos are not accepted. Each file is limited to 50 MB.</span></div><div class="voice-recorder"><button type="button" class="secondary" data-action="record-voice">${icon('mic')} Record voice note</button><span class="muted small" id="voice-status">Not recording</span><audio id="voice-preview" controls hidden></audio></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Publish post</button></div></form></div>`;
 }
 
 function profileEditorModal() {
@@ -459,7 +477,7 @@ document.addEventListener('click',e=>{
   const editMessage=e.target.closest('[data-edit-message]');
   if(editMessage){const current=editMessage.closest('.bubble')?.childNodes?.[0]?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
   const action=e.target.closest('[data-action]'); if(!action)return;
-  if(action.dataset.action==='dismiss-apk'){localStorage.setItem('studyloop_apk_prompt_dismissed','1');action.closest('[data-apk-prompt]')?.remove();return;}
+  if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)localStorage.setItem('studyloop_apk_prompt_dismissed','1');prompt?.remove();return;}
   if(action.dataset.action==='download-apk'){localStorage.setItem('studyloop_apk_prompt_dismissed','1');return;}
   const post=action.closest('[data-post]');
   if(action.dataset.action==='zoom-image'){document.body.insertAdjacentHTML('beforeend',`<div class="image-lightbox" data-action="close-modal"><img src="${action.src}" alt="Expanded attachment" /></div>`);return;}
@@ -475,14 +493,14 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='download-post'){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));const url=safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL);if(url){const link=document.createElement('a');link.href=url;link.download=item?.file?.name||'studyloop-download';link.click();}else notify('No downloadable attachment found.');menu?.remove();return;}
   if(action.dataset.action==='delete-post'&&!post){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));if(item?.authorId===state.userId){deletePostAndAttachments(item).then(()=>{const index=posts.indexOf(item);if(index>=0)posts.splice(index,1);menu?.remove();render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));}return;}
   if(action.dataset.action==='delete-post'&&post){const item=posts.find(entry=>String(entry.id)===String(post.dataset.post));if(item?.authorId===state.userId)deletePostAndAttachments(item).then(()=>{state.page='home';render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));return;}
-  if(action.dataset.action==='upload-saved'||action.dataset.action==='upload-file'){const input=$('#file-upload');input.accept='image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/webm,application/pdf';input.dataset.destination=state.page==='messages'&&state.activeChat!==0?'chat':'saved';input.click();return;}
+  if(action.dataset.action==='upload-saved'||action.dataset.action==='upload-file'){const input=$('#file-upload');input.accept=UPLOAD_ACCEPT;input.dataset.destination=state.page==='messages'&&state.activeChat!==0?'chat':'saved';input.click();return;}
   if(action.dataset.action==='channel-post'){state.recordedAudio=null;document.body.insertAdjacentHTML('beforeend',postComposerModal());return;}
   if(action.dataset.action==='record-voice'){
     if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     const status=$('#voice-status'); const preview=$('#voice-preview');
     if(activeRecorder?.state==='recording'){activeRecorder.stop();clearInterval(recordingTimer);action.textContent='Record voice note';return;}
     navigator.mediaDevices.getUserMedia({ audio:true }).then(stream=>{
-      activeRecordingStream=stream; const chunks=[]; activeRecorder=new MediaRecorder(stream);
+      activeRecordingStream=stream; const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);
       activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
       activeRecorder.onstop=()=>{state.recordedAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});stream.getTracks().forEach(track=>track.stop());if(preview){preview.src=URL.createObjectURL(state.recordedAudio);preview.hidden=false;}clearInterval(recordingTimer);const seconds=Math.max(1,Math.round((Date.now()-recordingStartedAt)/1000));state.recordedAudioDuration=seconds;if(status)status.textContent='Voice note ready · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');action.textContent='Record again';};
       activeRecorder.start(); recordingStartedAt=Date.now(); if(status)status.textContent='Recording 0:00 · tap to stop'; recordingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-recordingStartedAt)/1000);if(status)status.textContent='Recording '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · tap to stop';},250); action.textContent='Stop recording';
@@ -494,12 +512,12 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='record-chat-voice'){
     if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     if(activeRecorder?.state==='recording'){activeRecorder.stop();action.disabled=true;return;}
-    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];activeRecorder=new MediaRecorder(stream);action.classList.add('recording');action.title='Recording - tap to stop';activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());action.classList.remove('recording');state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudioURL=URL.createObjectURL(state.chatAudio);render();notify('Listen to the voice note, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.title='Recording - tap to stop';activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());action.classList.remove('recording');state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudioURL=URL.createObjectURL(state.chatAudio);render();notify('Listen to the voice note, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
   }
   if(action.dataset.action==='record-comment-voice'){
     if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     if(activeRecorder?.state==='recording'){activeRecorder.stop();action.textContent='Processing…';return;}
-    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];activeRecorder=new MediaRecorder(stream);action.classList.add('recording');action.setAttribute('aria-label','Stop recording');activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());state.commentAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});action.classList.remove('recording');action.setAttribute('aria-label','Record again');const preview=$('#comment-voice-preview');const discard=$('[data-action="discard-comment-voice"]');if(preview){preview.src=URL.createObjectURL(state.commentAudio);preview.hidden=false;}if(discard)discard.hidden=false;notify('Listen to your voice comment, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.setAttribute('aria-label','Stop recording');activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());state.commentAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});action.classList.remove('recording');action.setAttribute('aria-label','Record again');const preview=$('#comment-voice-preview');const discard=$('[data-action="discard-comment-voice"]');if(preview){preview.src=URL.createObjectURL(state.commentAudio);preview.hidden=false;}if(discard)discard.hidden=false;notify('Listen to your voice comment, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
   }
   if(action.dataset.action==='share-saved'){state.sharePostId=state.activePost;document.body.insertAdjacentHTML('beforeend',shareModal(state.sharePostId));return;}
   if(action.dataset.action==='edit-profile'){document.body.insertAdjacentHTML('beforeend',profileEditorModal());return;}
@@ -565,14 +583,14 @@ document.addEventListener('submit',async e=>{
   if(e.target.id==='post-form'){
     e.preventDefault();if(guestNeedsSignIn('Sign in to publish a post.'))return;
     const data=new FormData(e.target);const text=String(data.get('postText')||'').trim();const assets=data.getAll('assets').filter(file=>file instanceof File&&file.size);
-    const safeTypes=new Set(['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm','application/pdf']);
-    if(assets.length>3||assets.some(file=>file.size>50*1024*1024||!safeTypes.has(file.type))){notify('Use up to one image, one audio file, and one PDF, each 50 MB or smaller.');return;}
+    const kinds=assets.map(uploadKind);
+    if(assets.length>3||assets.some((file,index)=>file.size>50*1024*1024||!kinds[index])||new Set(kinds).size!==kinds.length){notify('Use up to one image, one document, and one audio file, each 50 MB or smaller. Videos are not accepted.');return;}
     if(!text&&!assets.length&&!state.recordedAudio){notify('Add text, an attachment, or a voice note before publishing.');return;}
     const channel=channels[state.activeChannel];if(!channel||!state.joined.has(state.activeChannel)){notify('Join this channel before publishing.');return;}
     const submit=e.target.querySelector('button.primary');submit.disabled=true;submit.textContent='Publishing…';document.querySelector('.modal-backdrop')?.remove();notify('Publishing post…');
     const uploaded=[];
     try{
-      const id=crypto.randomUUID();const image=assets.find(file=>file.type.startsWith('image/'));const audio=state.recordedAudio||assets.find(file=>file.type.startsWith('audio/')||file.type==='video/webm');const documentFile=assets.find(file=>file.type==='application/pdf');
+      const id=crypto.randomUUID();const image=assets.find(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFile=assets.find(file=>uploadKind(file)==='document');
       let imageURL=null,audioURL=null,fileURL=null;
       if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audio.type.includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
@@ -590,8 +608,8 @@ document.addEventListener('change',async e=>{
   if(e.target.id!=='file-upload')return;
   e.stopImmediatePropagation();
   const file=e.target.files?.[0]; if(!file)return;
-  const allowed=['application/pdf','image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','video/webm'].includes(file.type);
-  if(!allowed){notify('Choose a PDF, image, or audio file. HTML and executable files are not allowed.');e.target.value='';return;}
+  const allowed=ALLOWED_UPLOAD_TYPES.has(baseMimeType(file.type));
+  if(!allowed){notify('Choose an image, voice note, PDF, Office document, or text file. Videos, HTML, and executable files are not allowed.');e.target.value='';return;}
   if(file.size>50*1024*1024){notify('Files must be 50 MB or smaller.');e.target.value='';return;}
   const size=file.size<1024*1024?`${Math.max(1,Math.round(file.size/1024))} KB`:`${(file.size/(1024*1024)).toFixed(1)} MB`;
   try {
@@ -640,7 +658,7 @@ async function subscribeActiveMessages() {
 
 function showApkPrompt() {
   if(localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Get the StudyLoop Android app for a faster mobile experience.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><a class="primary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div></div>`);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Get the StudyLoop Android app for a faster experience.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><a class="primary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div></div>`);
 }
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{discussionComments[state.activePost]=comments.map(comment=>({id:comment.id,parentId:comment.parentId||null,authorId:comment.authorId||'',initials:initials(comment.author),name:comment.author,authorPhotoURL:comment.authorPhotoURL||'',ago:comment.createdAt?.toDate?relativeTime(comment.createdAt):'now',text:comment.text||'',imageURL:comment.imageURL||'',audioURL:comment.audioURL||''}));if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {

@@ -9,14 +9,18 @@
         android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
+        android:allowBackup="false"
         android:debuggable="true"
         android:extractNativeLibs="false"
+        android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="StudyLoop"
         android:roundIcon="@mipmap/ic_launcher"
-        android:theme="@style/AppTheme" >
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="false" >
         <activity
             android:name="com.scheke.studyloop.MainActivity"
             android:exported="true" >

@@ -11,36 +11,45 @@
 11    <uses-permission android:name="android.permission.INTERNET" />
 11-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:2:5-67
 11-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:2:22-64
-12
-13    <application
-13-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:5-10:19
-14        android:debuggable="true"
-15        android:extractNativeLibs="false"
-16        android:icon="@mipmap/ic_launcher"
-16-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:76-110
-17        android:label="StudyLoop"
-17-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:50-75
-18        android:roundIcon="@mipmap/ic_launcher"
-18-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:111-150
-19        android:theme="@style/AppTheme" >
-19-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:18-49
-20        <activity
-20-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:9-9:20
-21            android:name="com.scheke.studyloop.MainActivity"
-21-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:19-47
-22            android:exported="true" >
-22-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:48-71
-23            <intent-filter>
-23-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:13-8:29
-24                <action android:name="android.intent.action.MAIN" />
-24-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:17-69
-24-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:25-66
-25
-26                <category android:name="android.intent.category.LAUNCHER" />
-26-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:17-77
-26-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:27-74
-27            </intent-filter>
-28        </activity>
-29    </application>
-30
-31</manifest>
+12    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+12-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:5-71
+12-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:22-68
+13
+14    <application
+14-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:5-11:19
+15        android:allowBackup="false"
+15-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:188-215
+16        android:debuggable="true"
+17        android:extractNativeLibs="false"
+18        android:hardwareAccelerated="true"
+18-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:216-250
+19        android:icon="@mipmap/ic_launcher"
+19-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:76-110
+20        android:label="StudyLoop"
+20-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:50-75
+21        android:roundIcon="@mipmap/ic_launcher"
+21-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:111-150
+22        android:theme="@style/AppTheme"
+22-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:18-49
+23        android:usesCleartextTraffic="false" >
+23-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:151-187
+24        <activity
+24-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:9-10:20
+25            android:name="com.scheke.studyloop.MainActivity"
+25-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:19-47
+26            android:exported="true" >
+26-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:48-71
+27            <intent-filter>
+27-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:13-9:29
+28                <action android:name="android.intent.action.MAIN" />
+28-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:17-69
+28-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:25-66
+29
+30                <category android:name="android.intent.category.LAUNCHER" />
+30-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:17-77
+30-->C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:27-74
+31            </intent-filter>
+32        </activity>
+33    </application>
+34
+35</manifest>
