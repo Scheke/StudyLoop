@@ -15,34 +15,13 @@ const ALLOWED_UPLOAD_TYPES = new Set([...IMAGE_TYPES,...AUDIO_TYPES,...DOCUMENT_
 const UPLOAD_ACCEPT = [...ALLOWED_UPLOAD_TYPES].join(',');
 const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase();
 const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
-function pcmToWav(samples, sampleRate) {
-  const targetRate=16000;
-  const ratio=sampleRate/targetRate;
-  const length=Math.max(1,Math.floor(samples.length/ratio));
-  const buffer=new ArrayBuffer(44+length*2);
-  const view=new DataView(buffer);
-  const write=(offset,value)=>{for(let i=0;i<value.length;i++)view.setUint8(offset+i,value.charCodeAt(i));};
-  write(0,'RIFF');view.setUint32(4,36+length*2,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,targetRate,true);view.setUint32(28,targetRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,length*2,true);
-  for(let i=0;i<length;i++){const source=Math.min(samples.length-1,Math.floor(i*ratio));const value=Math.max(-1,Math.min(1,samples[source]||0));view.setInt16(44+i*2,value<0?value*0x8000:value*0x7fff,true);}
-  return new Blob([view],{type:'audio/wav'});
-}
-class PcmWavRecorder {
-  constructor(stream) {
-    const AudioContextClass=window.AudioContext||window.webkitAudioContext;
-    if(!AudioContextClass)throw Object.assign(new Error('Audio recording is not supported.'),{name:'NotSupportedError'});
-    this.stream=stream;this.context=new AudioContextClass();this.source=this.context.createMediaStreamSource(stream);this.processor=this.context.createScriptProcessor(4096,1,1);this.sink=this.context.createGain();this.sink.gain.value=0;this.samples=[];this.state='inactive';this.mimeType='audio/wav';
-    this.processor.onaudioprocess=event=>{if(this.state!=='recording')return;const input=event.inputBuffer.getChannelData(0);this.samples.push(new Float32Array(input));};
-    this.source.connect(this.processor);this.processor.connect(this.sink);this.sink.connect(this.context.destination);
-  }
-  start(){this.context.resume?.();this.state='recording';}
-  pause(){if(this.state==='recording')this.state='paused';}
-  resume(){if(this.state==='paused'){this.context.resume?.();this.state='recording';}}
-  stop(){if(this.state==='inactive')return;this.state='inactive';this.processor.disconnect();this.source.disconnect();this.sink.disconnect();const length=this.samples.reduce((total,part)=>total+part.length,0);const merged=new Float32Array(length);let offset=0;for(const part of this.samples){merged.set(part,offset);offset+=part.length;}const blob=pcmToWav(merged,this.context.sampleRate||48000);this.context.close?.().catch(()=>{});this.ondataavailable?.({data:blob});Promise.resolve().then(()=>this.onstop?.());}
-}
+const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
 function createAudioRecorder(stream) {
-  return new PcmWavRecorder(stream);
+  if(!window.MediaRecorder)throw Object.assign(new Error('Audio recording is not supported in this browser.'),{name:'NotSupportedError'});
+  const mimeType=preferredAudioMimeType();
+  return new MediaRecorder(stream,mimeType?{mimeType}:undefined);
 }
-const audioExtension = () => 'wav';
+const audioExtension = type => ({'audio/mp4':'m4a','audio/ogg':'ogg','audio/wav':'wav'})[baseMimeType(type)]||'webm';
 function microphoneError(error) {
   if(!window.isSecureContext)return 'Microphone requires a secure HTTPS connection.';
   if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return 'Microphone access is blocked. Enable it for StudyLoop in phone Settings, then try again.';
@@ -363,7 +342,7 @@ function settingsPage() {
     'Privacy & security':'Control who can find you and how your account stays secure.',
   }[setting]||'Manage this area of your account.';
   const securityActions=setting==='Privacy & security'?`<button class="secondary" data-action="password-reset">Send password reset email</button><button class="secondary danger-action" data-action="deactivate-account">Deactivate account</button>`:'';
-   const installAction=setting==='Install StudyLoop'?`<div class="install-settings-card"><img src="/studyloop-logo.png" alt="StudyLoop" /><div><strong>Install StudyLoop</strong><p class="muted">The installed website has reliable microphone and notification support.</p><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button><button class="secondary" data-action="install-help">How to install manually</button><a class="secondary apk-download" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download Android APK</a></div></div>`:'';
+   const installAction=setting==='Install StudyLoop'?`<div class="install-settings-card"><img src="/studyloop-logo.png" alt="StudyLoop" /><div><strong>Install StudyLoop</strong><p class="muted">The installed website has reliable microphone and notification support.</p><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button><button class="secondary" data-action="install-help">How to install manually</button></div></div>`:'';
   const shareAction=setting==='Share StudyLoop'?`<div class="app-share-card"><strong>Share StudyLoop</strong><p class="muted">Invite classmates to StudyLoop using the website link.</p><div class="app-link-row"><input id="studyloop-app-link" value="${STUDYLOOP_URL}" readonly aria-label="StudyLoop website link" /><button class="secondary" data-action="copy-app-link">Copy</button></div><a class="whatsapp-share" href="https://wa.me/?text=${encodeURIComponent(`Join me on StudyLoop: ${STUDYLOOP_URL}`)}" target="_blank" rel="noopener noreferrer">${icon('share')} Share to WhatsApp</a></div>`:'';
   return shell(`<div class="stack"><button class="back-link" data-nav="profile">${icon('arrow')} Back to profile</button><section class="card section-card"><h2 style="margin:0">${escapeHtml(setting)}</h2><p class="muted">${escapeHtml(copy)}</p>${installAction}${shareAction}<div class="settings-row">${icon('check')}<span>${setting==='Privacy & security'?'Profile visible to university members':escapeHtml(state.profileName)}</span></div><div class="settings-row">${icon('bell')}<span>${setting==='Privacy & security'?'Login alerts enabled':escapeHtml(state.userEmail||'No email loaded')}</span></div>${securityActions}</section></div>`,setting,false);
 }
@@ -862,7 +841,6 @@ document.addEventListener('click',e=>{
   if(editMessage){const current=editMessage.closest('.bubble')?.childNodes?.[0]?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
   const action=e.target.closest('[data-action]'); if(!action)return;
   if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)persistApkDismissal();prompt?.remove();return;}
-  if(action.dataset.action==='download-apk'){persistApkDismissal();return;}
   if(action.dataset.action==='install-pwa'){persistApkDismissal();if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt.userChoice.then(choice=>{if(choice.outcome!=='accepted')notify('You can install StudyLoop later from Chrome’s menu.');deferredInstallPrompt=null;}).catch(()=>installHelpModal());}else installHelpModal();return;}
   if(action.dataset.action==='install-help'){installHelpModal();return;}
   const post=action.closest('[data-post]');
@@ -1161,7 +1139,7 @@ function installHelpModal() {
 }
 function showApkPrompt() {
   if(isInstalledApp()||state.apkPromptDismissed||localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Add StudyLoop to your home screen for reliable voice recording.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button><a class="secondary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK</a></div></div></div>`);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Add StudyLoop to your home screen for reliable voice recording.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button></div></div></div>`);
 }
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {
@@ -1172,7 +1150,7 @@ async function connectFirebase() {
       if (!user) {
         resetPrivateState();
         if (!state.isGuest) { state.isAuthenticated=false; state.userId=''; state.userEmail='';state.profileName='';state.profilePhotoURL=''; }
-        render();setTimeout(showApkPrompt,500);
+        render();
         return;
       }
       if(currentAuthUid&&currentAuthUid!==user.uid)resetPrivateState();
