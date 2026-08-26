@@ -59,7 +59,7 @@ export async function signUp(username, email, password) {
   const normalizedEmail=String(email||'').trim().toLowerCase();
   const cleanUsername=String(username||'').trim();
   const result = await s.authApi.createUserWithEmailAndPassword(s.auth, normalizedEmail, password);
-  const profile={ username, course:'', yearLevel:'', bio:'', photoURL:'', deactivated:false };
+  const profile={ username, course:'', yearLevel:'', bio:'', photoURL:'', deactivated:false, apkPromptDismissed:false };
   try {
     await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', result.user.uid), { ...profile, username:cleanUsername, email:normalizedEmail, termsVersion:'2026-08', acceptedTermsAt:s.firestoreApi.serverTimestamp(), createdAt:s.firestoreApi.serverTimestamp(), updatedAt:s.firestoreApi.serverTimestamp() });
     await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', result.user.uid), { username:cleanUsername, course:'', yearLevel:'', bio:'', photoURL:'', updatedAt:s.firestoreApi.serverTimestamp() });
@@ -74,6 +74,7 @@ export async function signOutUser() { const s = await getServices(); return s.au
 export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
 export async function deactivateUser(uid) { const s = await getServices(); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { deactivated: true, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
+export async function setInstallPromptDismissed(uid, dismissed=true) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'users',uid),{apkPromptDismissed:Boolean(dismissed),updatedAt:s.firestoreApi.serverTimestamp()}); }
 export async function getAccountEntitlement(uid) { const s=await getServices();const [snapshot,token]=await Promise.all([s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'entitlements',uid)),s.auth.currentUser?.getIdTokenResult()]);const fromClaim=token?.claims?.plan;const fromDocument=snapshot.exists()?snapshot.data().plan:null;return ['Free','Student+','Power'].includes(fromClaim)?fromClaim:['Free','Student+','Power'].includes(fromDocument)?fromDocument:'Free'; }
 export async function updateUserProfile(uid, profile) { const s = await getServices(); const publicProfile={ username:profile.username, course:profile.course, yearLevel:profile.yearLevel, bio:profile.bio, photoURL:profile.photoURL }; await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function observeAuth(callback) { const s = await getServices(); return s.authApi.onAuthStateChanged(s.auth, callback); }
@@ -102,5 +103,12 @@ export async function observeCloudComments(postId,onChange,onError) { const s=aw
 export async function report(type, targetId, reason, userId) { return rateLimitedWrite('report',(transaction,s)=>{const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'reports'));transaction.set(ref,{type,targetId,reason,userId,createdAt:s.firestoreApi.serverTimestamp()});return ref;}); }
 export async function saveCloudPost(post, userId) { const clean=Object.fromEntries(Object.entries({...post}).filter(([,value])=>value!==undefined));return rateLimitedWrite('post',(transaction,s)=>transaction.set(s.firestoreApi.doc(s.db,'posts',String(post.id)),{...clean,createdAt:s.firestoreApi.serverTimestamp()})); }
 export async function deleteCloudPost(id) { const s = await getServices(); return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db, 'posts', String(id))); }
-export async function uploadAsset(file, path) { const s = await getServices(); const ref=s.storageApi.ref(s.storage,path); const contentType=String(file.type||'').split(';')[0].trim().toLowerCase(); await s.storageApi.uploadBytes(ref,file,{contentType,customMetadata:{ownerUid:s.auth.currentUser?.uid||'',uploadedAt:new Date().toISOString(),scanStatus:'unverified'}}); return s.storageApi.getDownloadURL(ref); }
+export async function uploadAsset(file, path) {
+  const s=await getServices();const ref=s.storageApi.ref(s.storage,path);const contentType=String(file.type||'').split(';')[0].trim().toLowerCase();
+  const emit=(status,progress=0)=>document.dispatchEvent(new CustomEvent('studyloop-upload-progress',{detail:{id:path,name:file.name||'Upload',status,progress}}));
+  const task=s.storageApi.uploadBytesResumable(ref,file,{contentType,customMetadata:{ownerUid:s.auth.currentUser?.uid||'',uploadedAt:new Date().toISOString(),scanStatus:'unverified'}});
+  emit('uploading',0);
+  await new Promise((resolve,reject)=>task.on('state_changed',snapshot=>emit('uploading',snapshot.totalBytes?Math.round(snapshot.bytesTransferred/snapshot.totalBytes*100):0),error=>{emit('error',0);reject(error);},()=>{emit('complete',100);resolve();}));
+  return s.storageApi.getDownloadURL(task.snapshot.ref);
+}
 export async function deleteUploadedAsset(url) { const s=await getServices();if(!url)return;return s.storageApi.deleteObject(s.storageApi.ref(s.storage,url)); }

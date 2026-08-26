@@ -75,6 +75,7 @@ public class MainActivity extends Activity {
                 fileCallback = callback;
                 Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 picker.addCategory(Intent.CATEGORY_OPENABLE);
+                picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 picker.setType("*/*");
                 picker.putExtra(Intent.EXTRA_MIME_TYPES, ALLOWED_MIME_TYPES);
                 picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);

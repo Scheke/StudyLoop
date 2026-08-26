@@ -1,9 +1,9 @@
 -- Merging decision tree log ---
 manifest
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-12:12
-INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-12:12
-INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-12:12
-INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-12:12
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-13:12
+INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-13:12
+INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-13:12
+INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:1:1-13:12
 	package
 		INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml
 	android:versionName
@@ -20,41 +20,47 @@ uses-permission#android.permission.RECORD_AUDIO
 ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:5-71
 	android:name
 		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:3:22-68
+uses-feature#android.hardware.microphone
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:5-89
+	android:required
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:62-86
+	android:name
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:19-61
 application
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:5-11:19
-INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:5-11:19
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:5-12:19
+INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:5-12:19
 	android:extractNativeLibs
 		INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml
 	android:label
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:50-75
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:50-75
 	android:hardwareAccelerated
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:216-250
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:216-250
 	android:roundIcon
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:111-150
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:111-150
 	android:icon
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:76-110
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:76-110
 	android:allowBackup
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:188-215
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:188-215
 	android:theme
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:18-49
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:18-49
 	android:usesCleartextTraffic
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:4:151-187
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:151-187
 activity#com.scheke.studyloop.MainActivity
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:9-10:20
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:9-11:20
 	android:exported
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:48-71
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:48-71
 	android:name
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:5:19-47
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:19-47
 intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:6:13-9:29
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:13-10:29
 action#android.intent.action.MAIN
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:17-69
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:17-69
 	android:name
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:7:25-66
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:25-66
 category#android.intent.category.LAUNCHER
-ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:17-77
+ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:9:17-77
 	android:name
-		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:8:27-74
+		ADDED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml:9:27-74
 uses-sdk
 INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from C:\Users\schek\FULL STACK DEV\business apps\School Learning Platform\android\app\src\main\AndroidManifest.xml

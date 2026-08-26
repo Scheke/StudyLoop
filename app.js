@@ -1,5 +1,5 @@
 import './styles.css';
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -19,6 +19,12 @@ let activeRecorder;
 let activeRecordingStream;
 let recordingTimer;
 let recordingStartedAt=0;
+let recordingElapsedMs=0;
+let discardActiveRecording=false;
+let recordingAudioContext;
+let recordingAnalyser;
+let recordingAnimationFrame;
+let scrollChannelToLatest=false;
 
 const state = {
   page: 'landing',
@@ -32,6 +38,7 @@ const state = {
   profileCourse: '',
   profileYear: '',
   profilePhotoURL: '',
+  apkPromptDismissed: false,
   subscriptionPlan: 'Free',
   storageAddons: 0,
   storageUsedMB: 0,
@@ -39,6 +46,9 @@ const state = {
   feedFilter: 'All',
   channelMode: 'joined',
   channelSearch: '',
+  channelMessageSearch: '',
+  channelSearchOpen: false,
+  chatSearch: '',
   activeChat: 0,
   activeChannel: 0,
   channelTab: 'posts',
@@ -58,11 +68,30 @@ const state = {
   joined: new Set(),
   memberChannelIds: new Set(),
   recordedAudio: null,
+  recordedAudioURL: '',
+  recordedAudioDuration: 0,
+  channelRecording: false,
+  channelRecordingPaused: false,
+  channelRecordingLocked: false,
   commentAudio: null,
   chatAudio: null,
   chatAudioURL: '',
+  chatAudioDuration: 0,
+  chatRecording: false,
+  chatRecordingPaused: false,
+  chatRecordingLocked: false,
+  replyToMessage: null,
   replyToCommentId: null,
 };
+
+const formatMediaTime = seconds => `${Math.floor(Math.max(0,seconds)/60)}:${String(Math.floor(Math.max(0,seconds))%60).padStart(2,'0')}`;
+const waveformMarkup = (count=34) => `<span class="voice-waveform" aria-hidden="true">${Array.from({length:count},(_,index)=>`<i style="--bar:${18+((index*17)%28)}%"></i>`).join('')}</span>`;
+
+function voiceNotePlayer(url,duration=0,label='Voice note') {
+  const safeUrl=safeAssetUrl(url);
+  if(!safeUrl)return '';
+  return `<div class="voice-note-player" data-voice-player><button type="button" class="voice-play" data-action="toggle-voice-note" aria-label="Play ${escapeHtml(label)}"><span class="voice-play-glyph"></span></button><div class="voice-track">${waveformMarkup()}<span class="voice-note-time" data-voice-time>${formatMediaTime(duration)}</span></div><audio preload="metadata" src="${safeUrl}"></audio></div>`;
+}
 
 const channels = [];
 const posts = [];
@@ -72,12 +101,33 @@ const discoverPeople = [];
 const discussionComments = {};
 const notifications = [];
 const chats = [];
+const activeUploads = new Map();
 let inboxMessages=[];
+
+function syncPostCommentCount(postId, count) {
+  const post=posts.find(item=>String(item.id)===String(postId));
+  if(post)post.comments=Math.max(0,Number(count)||0);
+}
+
+function normalizeDiscussionComment(comment) {
+  return {
+    id:comment.id,
+    parentId:comment.parentId||null,
+    authorId:comment.authorId||'',
+    initials:initials(comment.author),
+    name:comment.author,
+    authorPhotoURL:comment.authorPhotoURL||'',
+    ago:comment.createdAt?.toDate?relativeTime(comment.createdAt):relativeTime(comment.createdAt||new Date()),
+    text:comment.text||'',
+    imageURL:comment.imageURL||'',
+    audioURL:comment.audioURL||''
+  };
+}
 
 function initials(name='StudyLoop') { return name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase(); }
 function avatar(person, cls='') { const known=person?.id?people.find(profile=>profile.id===person.id):person?.authorId?people.find(profile=>profile.id===person.authorId):null;const photoURL=safeAssetUrl((person?.authorId&&known?.photoURL)||person?.photoURL||person?.authorPhotoURL||known?.photoURL);return `<div class="avatar ${escapeHtml(cls)}">${photoURL?`<img src="${photoURL}" alt="${escapeHtml(person?.name||person?.author||'User')}" />`:escapeHtml(person?.initials||initials(person?.name||person?.author))}</div>`; }
 function currentUserAvatar() { return avatar({ initials:initials(state.profileName), name:state.profileName, photoURL:state.profilePhotoURL }); }
-function applyProfile(profile={}) { profile=profile||{}; state.profileName=profile.username||state.profileName; state.profileBio=profile.bio||''; state.profileCourse=profile.course||''; state.profileYear=profile.yearLevel||''; state.profilePhotoURL=profile.photoURL||''; }
+function applyProfile(profile={}) { profile=profile||{}; state.profileName=profile.username||state.profileName; state.profileBio=profile.bio||''; state.profileCourse=profile.course||''; state.profileYear=profile.yearLevel||''; state.profilePhotoURL=profile.photoURL||'';state.apkPromptDismissed=profile.apkPromptDismissed===true; }
 function syncChats() { const old=[...chats];const oldSaved=old.find(chat=>chat.saved);const saved={ person:{initials:'SM',name:'Saved Messages',info:'Personal cloud storage',status:'Private'},time:oldSaved?.time||'',preview:oldSaved?.preview||'',messages:oldSaved?.messages||[],saved:true }; chats.splice(0,chats.length,saved,...people.map(person=>{const existing=old.find(chat=>chat.person?.id===person.id);return{person,time:existing?.time||'',preview:existing?.preview||'',messages:existing?.messages||[],unread:existing?.unread||0};}));applyInboxMessages(); }
 function conversationIdFor(index=state.activeChat) { if(index===0)return `saved_${state.userId}`; const peer=people[index-1]; return [state.userId,peer?.id].filter(Boolean).sort().join('_'); }
 function applyInboxMessages() {
@@ -104,6 +154,22 @@ function applyInboxMessages() {
   if(notifications.length>20)notifications.splice(20);
 }
 function notify(message) { const t=$('#toast'); t.textContent=message; t.classList.add('show'); clearTimeout(notify.timer); notify.timer=setTimeout(()=>t.classList.remove('show'),2200); }
+function renderUploadProgress() {
+  let panel=$('#upload-progress-panel');
+  if(!activeUploads.size){panel?.remove();return;}
+  const composer=$('#channel-compose-form,#chat-form');
+  if(panel&&composer&&!composer.contains(panel)){panel.remove();panel=null;}
+  if(!panel){if(composer){composer.insertAdjacentHTML('afterbegin','<aside class="upload-progress-panel inline-upload-progress" id="upload-progress-panel" aria-live="polite"></aside>');}else{document.body.insertAdjacentHTML('beforeend','<aside class="upload-progress-panel" id="upload-progress-panel" aria-live="polite"></aside>');}panel=$('#upload-progress-panel');}
+  panel.innerHTML=[...activeUploads.values()].map(upload=>`<div class="upload-progress-item ${upload.status}"><div><strong>${escapeHtml(upload.name)}</strong><span>${upload.status==='error'?'Upload failed':upload.status==='complete'?'Upload complete':`Uploading · ${upload.progress}%`}</span></div><div class="upload-progress-track"><i style="width:${Math.max(0,Math.min(100,upload.progress))}%"></i></div></div>`).join('');
+}
+document.addEventListener('studyloop-upload-progress',event=>{
+  const upload=event.detail||{};if(!upload.id)return;activeUploads.set(upload.id,upload);renderUploadProgress();
+  if(upload.status==='complete'||upload.status==='error')setTimeout(()=>{activeUploads.delete(upload.id);renderUploadProgress();},upload.status==='complete'?900:3500);
+});
+function persistApkDismissal() {
+  localStorage.setItem('studyloop_apk_prompt_dismissed','1');state.apkPromptDismissed=true;
+  if(state.isAuthenticated&&state.userId)setInstallPromptDismissed(state.userId,true).catch(error=>console.warn('Unable to save install prompt preference.',error));
+}
 function relativeTime(value) {
   const date=value?.toDate ? value.toDate() : value?.seconds ? new Date(value.seconds*1000) : value ? new Date(value) : null;
   if(!date || Number.isNaN(date.getTime())) return 'just now';
@@ -149,8 +215,9 @@ function navButton(page,label,ico,badge='') {
 }
 
 function shell(content,title,actions=true) {
-  const unreadMessages=chats.reduce((total,chat)=>total+(chat.unread||0),0);
-  return `<div class="app-shell">
+  const unreadMessages=chats.filter(chat=>!chat.saved&&chat.unread>0).length;
+  const immersive=state.page==='channel-detail'||state.page==='post-detail'||(state.page==='messages'&&state.chatOpen);
+  return `<div class="app-shell ${immersive?'immersive':''}">
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">${logo()}</span><span>StudyLoop</span></div>
       <nav class="nav">
@@ -222,7 +289,7 @@ function profilePage() {
   const accountRows=[['user','Personal information'],['bell','Notifications'],['bookmark','Saved posts'],['grid','Plans & storage'],['download','Install StudyLoop'],['users','Privacy & security']];
   const studyLine=[state.profileCourse,state.profileYear].filter(Boolean).join(' · ')||'Add your course and year level';
   const friendCount=state.relations.filter(relation=>relation.status==='accepted').length;
-  return shell(`<div class="stack"><section class="card profile-hero">${currentUserAvatar()}<div><h2>${escapeHtml(state.profileName)}</h2><div class="muted">${escapeHtml(studyLine)}</div><p>${escapeHtml(state.profileBio||'Tell classmates a little about yourself.')}</p></div><button class="secondary" style="margin-left:auto" data-action="edit-profile">Edit profile</button></section><div class="stat-row"><div class="stat"><strong>${friendCount}</strong><span>Friends</span></div><div class="stat"><strong>${state.joined.size}</strong><span>Channels</span></div><div class="stat"><strong>${state.saved.size}</strong><span>Saved</span></div></div><section class="card section-card"><div class="section-title"><h3>Account</h3></div>${accountRows.map(r=>`<button class="settings-row" data-setting="${escapeHtml(r[1])}">${icon(r[0])}<span>${escapeHtml(r[1])}</span>${icon('chevron','i-right')}</button>`).join('')}</section><button class="secondary danger-action" data-action="logout">Log out</button></div>`,'Profile',false);
+  return shell(`<div class="telegram-profile"><section class="telegram-profile-head">${currentUserAvatar()}<h2>${escapeHtml(state.profileName)}</h2><span>${escapeHtml(studyLine)}</span><p>${escapeHtml(state.profileBio||'Tell classmates a little about yourself.')}</p><button class="profile-edit-pill" data-action="edit-profile">Edit profile</button></section><nav class="profile-quick-stats" aria-label="Profile summary"><button data-nav="friends"><strong>${friendCount}</strong><span>Friends</span></button><button data-nav="channels"><strong>${state.joined.size}</strong><span>Channels</span></button><button data-nav="saved"><strong>${state.saved.size}</strong><span>Saved</span></button></nav><section class="telegram-settings-group"><h3>Account</h3>${accountRows.map(r=>`<button class="settings-row" data-setting="${escapeHtml(r[1])}"><span class="settings-icon">${icon(r[0])}</span><span>${escapeHtml(r[1])}</span>${icon('chevron','i-right')}</button>`).join('')}</section><section class="telegram-settings-group danger-group"><button class="settings-row logout-row" data-action="logout"><span class="settings-icon">${icon('arrow')}</span><span>Log out</span></button></section></div>`,'Profile',false);
 }
 
 async function deletePostAndAttachments(item) {
@@ -259,23 +326,22 @@ function homePage() {
 
 function channelsPage() {
   const list=channels.filter((c,i)=>(state.channelMode==='discover'||state.joined.has(i)||c.ownerId===state.userId)&&c.name.toLowerCase().includes(state.channelSearch.toLowerCase()));
-  return shell(`<div class="stack">
-    <div style="display:flex;gap:12px"><div class="segment" style="flex:1"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="icon-btn" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div>
-    <label class="search-box">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${state.channelSearch}" /></label>
-    <div class="stack">${list.length?list.map((raw)=>{const c={...raw,name:escapeHtml(raw.name),sub:escapeHtml(raw.sub),access:escapeHtml(raw.access),desc:escapeHtml(raw.desc),icon:escapeHtml(raw.icon),cls:escapeHtml(raw.cls)};const idx=channels.indexOf(raw),joined=!state.isGuest&&state.joined.has(idx);return `<article class="card channel-card"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-copy"><h3 data-open-channel="${idx}" role="button" tabindex="0">${c.name}</h3><div class="muted">${c.sub}</div><div class="channel-tags"><span class="public">◉ ${c.access}</span></div><p>${c.desc}</p></div>${joined?`<div class="channel-actions"><button class="secondary" data-open-channel="${idx}">Open</button><button class="action leave" data-leave="${idx}">Leave</button></div>`:`<button class="primary" data-join="${idx}">Join</button>`}</article>`}).join(''):`<div class="card empty"><div class="channel-icon">?</div><h3>No channels found</h3><p>Try a different name or browse all available channels.</p></div>`}</div>
-  </div>`,'Channels',false);
+  return shell(`<div class="telegram-directory"><div class="directory-tools"><div class="segment"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="new-channel-button" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div><label class="search-box directory-search">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${escapeHtml(state.channelSearch)}" /></label><section class="telegram-channel-list">${list.length?list.map(raw=>{const idx=channels.indexOf(raw),joined=!state.isGuest&&state.joined.has(idx);const preview=raw.desc||raw.sub||`${raw.access||'Public'} study channel`;return `<article class="telegram-channel-row"><button class="channel-row-main" data-open-channel="${idx}"><div class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</div><span class="channel-row-copy"><span class="channel-row-top"><strong>${escapeHtml(raw.name)}</strong><small>${Number(raw.members)||0} members</small></span><span class="channel-row-preview">${escapeHtml(preview)}</span><span class="channel-row-meta">${raw.access==='Private'?icon('bookmark'):icon('users')} ${escapeHtml(raw.access||'Public')}${raw.course?` · ${escapeHtml(raw.course)}`:''}</span></span></button><span class="channel-row-action">${joined?`<button class="row-open" data-open-channel="${idx}" aria-label="Open ${escapeHtml(raw.name)}">${icon('chevron')}</button>`:`<button class="row-join" data-join="${idx}">Join</button>`}</span></article>`}).join(''):`<div class="telegram-empty"><div class="channel-icon">${icon('search')}</div><h3>No channels found</h3><p>Try another search or create a new channel.</p><button class="primary" data-action="create-channel">Create channel</button></div>`}</section></div>`,'Channels',false);
 }
 
 function messageBubble(message) {
+  if (!Array.isArray(message) && message.type==='unread-divider') return `<div class="unread-divider"><span>Unread messages</span></div>`;
+  if (!Array.isArray(message) && message.type==='text') {
+    const reply=message.replyTo?`<div class="message-reply-preview"><b>${escapeHtml(message.replyTo.sender||'StudyLoop member')}</b><span>${escapeHtml(message.replyTo.text||'Attachment')}</span></div>`:'';
+    return `<div class="bubble ${message.side}" data-message-id="${escapeHtml(message.id)}">${reply}<span>${escapeHtml(message.text)}</span><div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.edited?'edited · ':''}${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
+  }
   if (!Array.isArray(message) && message.type==='post-link') {
     const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
     return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('share')} Forwarded post</div><button class="post-link-card" data-open-post="${escapeHtml(message.postId)}">${icon('chevron')} Open original post</button><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='attachment') {
     const file=message.file||{}; const fileUrl=safeAssetUrl(file.url);
-    const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
-    const shareButton=message.side==='mine'&&message.id?`<button class="message-share" data-forward-message="${escapeHtml(message.id)}">Forward</button>`:'';
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?`<audio class="post-audio" controls src="${fileUrl}"></audio>`:fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer">${shareButton}${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
+    return `<div class="bubble ${message.side} forwarded-bubble" data-message-id="${escapeHtml(message.id)}"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?voiceNotePlayer(file.url,file.duration||0,'voice message'):fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='forwarded-post') {
     let post=message.post||{};
@@ -285,10 +351,21 @@ function messageBubble(message) {
     const audioUrl=safeAssetUrl(post.audioURL);
     const fileMarkup=post.file?(fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${post.file.name}"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span>${icon('download')}</a>`:`<div class="forwarded-file"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span></div>`):'';
     const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
-    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('bookmark')} Saved post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span>${post.text?`<p>${post.text}</p>`:''}${imageUrl?`<img class="saved-post-image" src="${imageUrl}" alt="Saved post attachment" data-action="zoom-image" />`:''}${fileMarkup}${audioUrl?`<audio class="post-audio" controls src="${audioUrl}"></audio>`:''}</div><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
+    return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('bookmark')} Saved post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span>${post.text?`<p>${post.text}</p>`:''}${imageUrl?`<img class="saved-post-image" src="${imageUrl}" alt="Saved post attachment" data-action="zoom-image" />`:''}${fileMarkup}${audioUrl?voiceNotePlayer(post.audioURL,post.audioDuration||0,'saved voice note'):''}</div><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   const own=message[0]==='mine'&&message[3];const editButton=own?`<button class="message-share" data-edit-message="${escapeHtml(message[3])}">Edit</button>`:'';const deleteButton=own?`<button class="message-delete" data-delete-message="${escapeHtml(message[3])}">Delete</button>`:'';
   return `<div class="bubble ${escapeHtml(message[0])}">${escapeHtml(message[1])}<div class="bubble-footer">${editButton}${deleteButton}<span class="bubble-time">${escapeHtml(message[2])} ${message[0]==='mine'?(message[4]?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
+}
+
+function chatComposer(blocked=false) {
+  if(blocked)return `<div class="chat-compose blocked-compose">Unblock this user to send messages.</div>`;
+  const draft=escapeHtml(localStorage.getItem(`studyloop-draft:${state.userId}:${conversationIdFor()}`)||'');
+  const reply=state.replyToMessage?`<div class="compose-reply"><span><b>Replying to ${escapeHtml(state.replyToMessage.sender||'message')}</b><small>${escapeHtml(state.replyToMessage.text||'Attachment')}</small></span><button type="button" data-action="cancel-message-reply" aria-label="Cancel reply">${icon('x')}</button></div>`:'';
+  return `${reply}<form class="channel-compose chat-telegram-compose ${state.chatRecording?'is-recording':state.chatAudioURL?'is-preview':''}" id="chat-form">
+    <div class="channel-compose-idle"><button type="button" class="channel-compose-action" data-action="upload-saved" aria-label="Attach picture or document">${icon('paperclip')}</button><input id="message-input" autocomplete="off" maxlength="4000" placeholder="Message" value="${draft}" /><button type="button" class="channel-mic" data-action="record-chat-voice" aria-label="Record voice note">${icon('mic')}</button><button class="channel-send-text" aria-label="Send message">${icon('send')}</button></div>
+    <div class="channel-compose-recording" aria-live="polite"><span class="recording-dot"></span><strong id="chat-record-time">${formatMediaTime(recordingElapsedMs/1000)}</strong>${waveformMarkup(42)}<button type="button" class="recording-cancel" data-action="discard-chat-voice">Cancel</button><button type="button" class="recording-pause ${state.chatRecordingPaused?'is-paused':''}" data-action="pause-chat-voice" aria-label="${state.chatRecordingPaused?'Resume':'Pause'} recording"><span></span></button><button type="button" class="recording-finish" data-action="finish-chat-voice" aria-label="Stop and preview">${icon('send')}</button></div>
+    <div class="channel-compose-preview"><button type="button" class="voice-discard" data-action="discard-chat-voice" aria-label="Discard voice note">${icon('x')}</button><button type="button" class="voice-preview-play" data-action="play-chat-preview" aria-label="Play voice note"><span class="voice-play-glyph"></span></button><div class="voice-preview-track">${waveformMarkup(34)}<span id="chat-preview-time">${formatMediaTime(state.chatAudioDuration)}</span></div><audio id="chat-voice-preview" preload="metadata" src="${escapeHtml(state.chatAudioURL)}"></audio><button class="recording-finish" aria-label="Send voice note">${icon('send')}</button></div>
+  </form>`;
 }
 
 function relationFor(userId) { return state.relations.find(relation=>(relation.senderId===state.userId&&relation.receiverId===userId)||(relation.receiverId===state.userId&&relation.senderId===userId)); }
@@ -297,7 +374,7 @@ function isAcceptedFriend(userId) { return relationFor(userId)?.status==='accept
 function messagesPage() {
   if (!chats.length) syncChats();
   const chat=chats[state.activeChat]||chats[0];
-  const visibleChats=chats.map((c,i)=>({c,i})).filter(({c})=>!c.saved&&(isAcceptedFriend(c.person?.id)||c.preview||c.unread));
+  const visibleChats=chats.map((c,i)=>({c,i})).filter(({c})=>!c.saved&&(isAcceptedFriend(c.person?.id)||c.preview||c.unread)&&`${c.person?.name||''} ${c.preview||''}`.toLowerCase().includes(state.chatSearch.toLowerCase()));
   const isIncomingRequest=entry=>{const relation=relationFor(entry.c.person?.id);return relation?.status==='pending'&&relation.receiverId===state.userId;};
   const requestChats=visibleChats.filter(isIncomingRequest);
   const regularChats=visibleChats.filter(entry=>!isIncomingRequest(entry));
@@ -306,8 +383,8 @@ function messagesPage() {
   const blocked=peerId&&state.blockedUsers.has(peerId);
   const pendingRequest=peerId?relationFor(peerId):null;
   return shell(`<div class="messages-layout ${state.chatOpen?'chat-open':''}">
-    <section class="conversation-list"><div class="conversation-search"><label class="search-box">${icon('search')}<input placeholder="Search conversations" /></label></div>${requestChats.length?`<div class="conversation-section-label">Message requests · ${requestChats.length}</div>${requestChats.map(renderChat).join('')}`:''}${regularChats.length?regularChats.map(renderChat).join(''):`<div class="card empty"><h3>No conversations yet</h3><p>Message a classmate from Discover to start a conversation.</p></div>`}</section>
-    <section class="chat-pane"><header class="chat-head"><button class="icon-btn back-mobile" data-action="back-chats">${icon('arrow')}</button>${avatar(chat.person,chat.saved?'green':'')}<div><strong>${escapeHtml(chat.person.name)}</strong><div class="small">${chat.saved?'Private saved space':'StudyLoop member'}</div></div>${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?`<button class="primary push" data-request-action="accepted" data-request-id="${escapeHtml(pendingRequest.id)}">Accept</button>`:''}${peerId?`<button class="secondary ${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?'':'push'}" data-action="toggle-block-user" data-user-id="${escapeHtml(peerId)}">${blocked?'Unblock':'Block'}</button>`:''}</header><div class="chat-messages" id="chat-messages">${chat.messages.map(messageBubble).join('')}</div>${blocked?`<div class="chat-compose blocked-compose">Unblock this user to send messages.</div>`:`<form class="chat-compose" id="chat-form"><button type="button" class="action" data-action="upload-saved">${icon('paperclip')}</button><button type="button" class="action" data-action="record-chat-voice" aria-label="Record voice note">${icon('mic')}</button>${state.chatAudioURL?`<audio class="chat-voice-preview" controls src="${state.chatAudioURL}"></audio><button type="button" class="message-delete" data-action="discard-chat-voice">Discard</button>`:''}<input id="message-input" autocomplete="off" maxlength="4000" placeholder="Write a message..." /><button class="send-btn" aria-label="Send">${icon('send')}</button></form>`}</section>
+    <section class="conversation-list"><div class="conversation-list-head"><strong>Chats</strong>${requestChats.length?`<span>${requestChats.length} request${requestChats.length===1?'':'s'}</span>`:''}</div><div class="conversation-search"><label class="search-box">${icon('search')}<input id="conversation-search" placeholder="Search conversations" value="${escapeHtml(state.chatSearch)}" /></label></div>${requestChats.length?`<div class="conversation-section-label">Message requests · ${requestChats.length}</div>${requestChats.map(renderChat).join('')}`:''}${regularChats.length?regularChats.map(renderChat).join(''):`<div class="telegram-empty compact-empty"><div class="channel-icon">${icon('chat')}</div><h3>${state.chatSearch?'No chats found':'No conversations yet'}</h3><p>${state.chatSearch?'Try another name or message.':'Message a classmate from Discover to start a conversation.'}</p></div>`}</section>
+    <section class="chat-pane"><header class="chat-head"><button class="icon-btn back-mobile" data-action="back-chats">${icon('arrow')}</button><button class="chat-profile" ${peerId?`data-profile="${people.findIndex(person=>person.id===peerId)}"`:''}>${avatar(chat.person,chat.saved?'green':'')}<span><strong>${escapeHtml(chat.person.name)}</strong><small>${chat.saved?'Private saved space':escapeHtml(chat.person.status||'StudyLoop member')}</small></span></button>${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?`<button class="primary push" data-request-action="accepted" data-request-id="${escapeHtml(pendingRequest.id)}">Accept</button>`:''}${peerId?`<button class="icon-btn ${pendingRequest?.status==='pending'&&pendingRequest.receiverId===state.userId?'':'push'}" data-action="chat-options" data-user-id="${escapeHtml(peerId)}" aria-label="Chat options">${icon('more')}</button>`:''}</header><div class="chat-messages" id="chat-messages">${chat.messages.map(messageBubble).join('')}</div>${chatComposer(blocked)}</section>
   </div>`,'Messages',false);
 }
 
@@ -322,23 +399,178 @@ function userProfilePage() {
   const user={...sourceUser,name:escapeHtml(sourceUser.name),info:escapeHtml(sourceUser.info),status:escapeHtml(sourceUser.status)};
   const userChannels=profileChannelsFor(state.profileUser);
   const isBlocked=state.blockedUsers.has(sourceUser.id);
-  return shell(`<div class="stack"><button class="back-link" data-nav="friends">${icon('arrow')} Back to friends</button><section class="card profile-hero">${avatar(user,state.profileUser===1?'green':'')}<div><h2>${user.name}</h2><div class="muted">${user.info}</div><p>${user.status} · StudyLoop member</p></div><button class="primary" data-person-chat="${state.profileUser}">Message</button></section><section class="card section-card"><div class="section-title"><h3>${user.name.split(' ')[0]}’s channels</h3><span class="muted small">${userChannels.length} channels</span></div>${userChannels.map(idx=>{const c=channels[idx],joined=state.joined.has(idx);return `<div class="mini-channel"><div class="channel-icon ${c.cls}">${c.icon}</div><div class="channel-body"><strong>${c.name}</strong><span>${c.sub} · ${c.access} channel</span></div>${joined?`<button class="secondary" data-open-channel="${idx}">Open</button>`:`<button class="primary" data-join="${idx}">Join</button>`}</div>`}).join('')}</section><button class="secondary danger-action" data-action="toggle-block-user" data-user-id="${escapeHtml(sourceUser.id)}">${isBlocked?'Unblock user':'Block user'}</button></div>`,'Profile',false);
+  return shell(`<div class="telegram-profile public-telegram-profile"><button class="profile-back" data-nav="friends">${icon('arrow')}</button><section class="telegram-profile-head">${avatar(user,state.profileUser===1?'green':'')}<h2>${user.name}</h2><span>${user.info}</span><p>${user.status||'StudyLoop member'}</p><div class="public-profile-actions"><button data-person-chat="${state.profileUser}">${icon('chat')}<span>Message</span></button><button data-action="toggle-block-user" data-user-id="${escapeHtml(sourceUser.id)}">${icon('more')}<span>${isBlocked?'Unblock':'Block'}</span></button></div></section><section class="telegram-settings-group profile-channel-group"><div class="telegram-group-title"><h3>Channels</h3><span>${userChannels.length}</span></div>${userChannels.length?userChannels.map(idx=>{const c=channels[idx],joined=state.joined.has(idx);return `<div class="profile-channel-row"><button class="channel-row-main" data-open-channel="${idx}"><div class="channel-icon ${escapeHtml(c.cls)}">${escapeHtml(c.icon)}</div><span><strong>${escapeHtml(c.name)}</strong><small>${escapeHtml(c.sub||c.access+' channel')}</small></span></button>${joined?`<button class="row-open" data-open-channel="${idx}">${icon('chevron')}</button>`:`<button class="row-join" data-join="${idx}">Join</button>`}</div>`}).join(''):`<div class="telegram-empty compact-empty"><p>No public channels yet.</p></div>`}</section></div>`,'Profile',false);
+}
+
+function channelPostBubble(post) {
+  const authorIndex=people.findIndex(person=>person.id===post.authorId);
+  const mine=post.authorId===state.userId;
+  const saved=state.saved.has(post.id);
+  const imageUrl=safeAssetUrl(post.imageURL);
+  const fileUrl=safeAssetUrl(post.file?.url);
+  const audioUrl=safeAssetUrl(post.audioURL);
+  return `<div class="channel-message ${mine?'mine':''}">
+    ${mine?'':avatar({...post,photoURL:post.authorPhotoURL},post.avatar||'')}
+    <article class="channel-message-bubble" data-post="${escapeHtml(post.id)}">
+      <div class="channel-message-head">${authorIndex>=0?`<button class="post-author" data-profile="${authorIndex}">${escapeHtml(post.author)}</button>`:`<strong>${escapeHtml(post.author)}</strong>`}<button class="action" data-action="more" aria-label="More options">${icon('more')}</button></div>
+      ${post.text?`<p class="channel-message-text">${escapeHtml(post.text)}</p>`:''}
+      ${imageUrl?`<img class="channel-message-image" src="${imageUrl}" alt="Post attachment" data-action="zoom-image" />`:''}
+      ${post.file?`<div class="file-card compact-file"><div class="file-icon">${baseMimeType(post.file.type)==='application/pdf'?'PDF':'FILE'}</div><div class="file-info"><strong>${escapeHtml(post.file.name)}</strong><span>${escapeHtml(post.file.meta||'Document')}</span></div>${fileUrl?`<a class="download" href="${fileUrl}" download="${escapeHtml(post.file.name||'download')}" aria-label="Download ${escapeHtml(post.file.name||'file')}">${icon('download')}</a>`:''}</div>`:''}
+      ${audioUrl?voiceNotePlayer(audioUrl,post.audioDuration||0):''}
+      <div class="channel-message-footer"><button class="action comment-count" data-action="comments" aria-label="Comments">${icon('chat')} ${Number(post.comments)||0}</button><button class="action channel-share" data-action="share" aria-label="Share post">${icon('share')}</button><span>${escapeHtml(channelPostTime(post.createdAt))}</span></div>
+    </article>
+  </div>`;
+}
+
+function channelPostDate(value) {
+  const date=value?.toDate?value.toDate():value?.seconds?new Date(value.seconds*1000):value?new Date(value):new Date();
+  return Number.isNaN(date.getTime())?new Date():date;
+}
+function channelPostTime(value) { return channelPostDate(value).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+function channelTimeline(channelPosts) {
+  const ordered=[...channelPosts].sort((a,b)=>channelPostDate(a.createdAt)-channelPostDate(b.createdAt));
+  let dateKey='';
+  return ordered.map(post=>{
+    const date=channelPostDate(post.createdAt);const nextKey=date.toDateString();
+    const divider=nextKey===dateKey?'':`<div class="channel-day"><span>${date.toLocaleDateString([],{month:'long',day:'numeric',year:date.getFullYear()===new Date().getFullYear()?undefined:'numeric'})}</span></div>`;
+    dateKey=nextKey;return `${divider}${channelPostBubble(post)}`;
+  }).join('');
+}
+
+function channelComposer(channel,joined) {
+  if(!joined)return `<div class="channel-join-note"><span>Join this channel to publish posts.</span><button class="primary" data-join="${state.activeChannel}">Join channel</button></div>`;
+  return `<form class="channel-compose ${state.channelRecording?'is-recording':state.recordedAudioURL?'is-preview':''}" id="channel-compose-form">
+    <div class="channel-attachment-preview" aria-live="polite"></div>
+    <div class="channel-compose-idle">
+      <label class="channel-compose-action" aria-label="Attach picture, document, or audio">${icon('paperclip')}<input type="file" name="channelAssets" accept="${UPLOAD_ACCEPT}" multiple hidden /></label>
+      <input name="channelText" maxlength="1000" autocomplete="off" placeholder="Message #${escapeHtml(channel.name)}" />
+      <button type="button" class="channel-mic" data-action="record-channel-voice" aria-label="Record voice note">${icon('mic')}</button>
+      <button class="channel-send-text" aria-label="Publish post">${icon('send')}</button>
+    </div>
+    <div class="channel-compose-recording" aria-live="polite">
+      <span class="recording-dot"></span><strong id="channel-record-time">${formatMediaTime(recordingElapsedMs/1000)}</strong>${waveformMarkup(42)}
+      <button type="button" class="recording-cancel" data-action="discard-channel-voice">Cancel</button>
+      <button type="button" class="recording-pause ${state.channelRecordingPaused?'is-paused':''}" data-action="pause-channel-voice" aria-label="${state.channelRecordingPaused?'Resume':'Pause'} recording"><span></span></button>
+      <button type="button" class="recording-finish" data-action="finish-channel-voice" aria-label="Stop and preview">${icon('send')}</button>
+    </div>
+    <div class="channel-compose-preview">
+      <button type="button" class="voice-discard" data-action="discard-channel-voice" aria-label="Discard voice note">${icon('x')}</button>
+      <button type="button" class="voice-preview-play" data-action="play-channel-preview" aria-label="Play voice note"><span class="voice-play-glyph"></span></button>
+      <div class="voice-preview-track">${waveformMarkup(34)}<span id="channel-preview-time">${formatMediaTime(state.recordedAudioDuration)}</span></div>
+      <audio id="channel-voice-preview" preload="metadata" src="${escapeHtml(state.recordedAudioURL)}"></audio>
+      <button class="recording-finish" aria-label="Publish voice note">${icon('send')}</button>
+    </div>
+  </form>`;
+}
+
+function setChannelComposerMode(mode) {
+  const composer=$('#channel-compose-form');
+  if(!composer)return;
+  composer.classList.toggle('is-recording',mode==='recording');
+  composer.classList.toggle('is-preview',mode==='preview');
+}
+
+function clearChannelVoice() {
+  clearInterval(recordingTimer);
+  cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;
+  recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;
+  activeRecordingStream?.getTracks?.().forEach(track=>track.stop());
+  activeRecordingStream=null;
+  if(state.recordedAudioURL)URL.revokeObjectURL(state.recordedAudioURL);
+  state.recordedAudio=null;
+  state.recordedAudioURL='';
+  state.recordedAudioDuration=0;
+  state.channelRecording=false;
+  state.channelRecordingPaused=false;
+  state.channelRecordingLocked=false;
+  recordingElapsedMs=0;
+  setChannelComposerMode('idle');
+}
+
+async function startChannelVoiceRecording() {
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  clearChannelVoice();
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  activeRecordingStream=stream;
+  const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+  if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
+  const chunks=[];
+  const mimeType=preferredAudioMimeType();
+  activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);
+  discardActiveRecording=false;
+  activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+  activeRecorder.onstop=()=>{
+    clearInterval(recordingTimer);
+    stream.getTracks().forEach(track=>track.stop());
+    activeRecordingStream=null;
+    cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;
+    state.channelRecording=false;
+    state.channelRecordingPaused=false;
+    if(discardActiveRecording){discardActiveRecording=false;clearChannelVoice();return;}
+    state.recordedAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});
+    state.recordedAudioDuration=Math.max(1,Math.round(recordingElapsedMs/1000));
+    state.recordedAudioURL=URL.createObjectURL(state.recordedAudio);
+    const preview=$('#channel-voice-preview');
+    if(preview)preview.src=state.recordedAudioURL;
+    const time=$('#channel-preview-time');
+    if(time)time.textContent=formatMediaTime(state.recordedAudioDuration);
+    setChannelComposerMode('preview');
+  };
+  activeRecorder.start(250);
+  recordingElapsedMs=0;
+  state.channelRecording=true;
+  state.channelRecordingPaused=false;
+  state.channelRecordingLocked=false;
+  setChannelComposerMode('recording');
+  const animateWaveform=()=>{if(!recordingAnalyser||!state.channelRecording)return;const data=new Uint8Array(recordingAnalyser.frequencyBinCount);recordingAnalyser.getByteFrequencyData(data);const bars=$$('#channel-compose-form .channel-compose-recording .voice-waveform i');bars.forEach((bar,index)=>{const value=data[index%data.length]||0;bar.style.height=`${Math.max(12,Math.min(100,12+value/255*88))}%`;});recordingAnimationFrame=requestAnimationFrame(animateWaveform);};animateWaveform();
+  recordingTimer=setInterval(()=>{
+    if(activeRecorder?.state==='recording')recordingElapsedMs+=100;
+    const time=$('#channel-record-time');
+    if(time)time.textContent=formatMediaTime(recordingElapsedMs/1000);
+  },100);
+}
+
+function clearChatVoice() {
+  clearInterval(recordingTimer);
+  cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;
+  recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;
+  activeRecordingStream?.getTracks?.().forEach(track=>track.stop());activeRecordingStream=null;
+  if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);
+  state.chatAudio=null;state.chatAudioURL='';state.chatAudioDuration=0;
+  state.chatRecording=false;state.chatRecordingPaused=false;state.chatRecordingLocked=false;
+  recordingElapsedMs=0;
+  const composer=$('#chat-form');composer?.classList.remove('is-recording','is-preview');
+}
+
+async function startChatVoiceRecording() {
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  clearChatVoice();
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});activeRecordingStream=stream;
+  const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+  if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
+  const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);discardActiveRecording=false;
+  activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+  activeRecorder.onstop=()=>{clearInterval(recordingTimer);stream.getTracks().forEach(track=>track.stop());activeRecordingStream=null;cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;state.chatRecording=false;state.chatRecordingPaused=false;if(discardActiveRecording){discardActiveRecording=false;clearChatVoice();return;}state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});state.chatAudioDuration=Math.max(1,Math.round(recordingElapsedMs/1000));state.chatAudioURL=URL.createObjectURL(state.chatAudio);const preview=$('#chat-voice-preview');if(preview)preview.src=state.chatAudioURL;const time=$('#chat-preview-time');if(time)time.textContent=formatMediaTime(state.chatAudioDuration);const composer=$('#chat-form');composer?.classList.remove('is-recording');composer?.classList.add('is-preview');};
+  activeRecorder.start(250);recordingElapsedMs=0;state.chatRecording=true;state.chatRecordingPaused=false;state.chatRecordingLocked=false;const composer=$('#chat-form');composer?.classList.add('is-recording');composer?.classList.remove('is-preview');
+  const animateWaveform=()=>{if(!recordingAnalyser||!state.chatRecording)return;const data=new Uint8Array(recordingAnalyser.frequencyBinCount);recordingAnalyser.getByteFrequencyData(data);const bars=$$('#chat-form .channel-compose-recording .voice-waveform i');bars.forEach((bar,index)=>{const value=data[index%data.length]||0;bar.style.height=`${Math.max(12,Math.min(100,12+value/255*88))}%`;});recordingAnimationFrame=requestAnimationFrame(animateWaveform);};animateWaveform();
+  recordingTimer=setInterval(()=>{if(activeRecorder?.state==='recording')recordingElapsedMs+=100;const time=$('#chat-record-time');if(time)time.textContent=formatMediaTime(recordingElapsedMs/1000);},100);
 }
 
 function channelDetailPage() {
   const channelRaw=channels[state.activeChannel]||channels[0];
-  const channel={...channelRaw,name:escapeHtml(channelRaw.name),course:escapeHtml(channelRaw.course),sub:escapeHtml(channelRaw.sub),access:escapeHtml(channelRaw.access),desc:escapeHtml(channelRaw.desc),icon:escapeHtml(channelRaw.icon),cls:escapeHtml(channelRaw.cls)};
+  if(!channelRaw)return shell(`<div class="card empty"><h3>Channel unavailable</h3><p>This channel could not be loaded.</p></div>`,'Channel',false);
+  const channel={...channelRaw,name:escapeHtml(channelRaw.name),sub:escapeHtml(channelRaw.sub),access:escapeHtml(channelRaw.access),icon:escapeHtml(channelRaw.icon),cls:escapeHtml(channelRaw.cls)};
   const joined=!state.isGuest&&state.joined.has(state.activeChannel);
-  const channelPosts=posts.filter(p=>p.course===channelRaw.name&&(channelRaw.access==='Public'||joined));
-  const files=channelPosts.filter(p=>p.file);
+  const channelPosts=posts.filter(post=>(post.channelId===channelRaw.id||post.course===channelRaw.name)&&(channelRaw.access==='Public'||joined)&&(!state.channelMessageSearch||`${post.author||''} ${post.text||''} ${post.file?.name||''}`.toLowerCase().includes(state.channelMessageSearch.toLowerCase())));
+  const files=channelPosts.filter(post=>post.file);
   const creator=channelRaw.ownerId===state.userId?{name:state.profileName,photoURL:state.profilePhotoURL,initials:initials(state.profileName)}:people.find(person=>person.id===channelRaw.ownerId);
   const createdDate=channelRaw.createdAt?.toDate?channelRaw.createdAt.toDate().toLocaleDateString([],{year:'numeric',month:'long',day:'numeric'}):'Date unavailable';
-  const body=state.channelTab==='files'
-    ? (files.length?files.map(p=>`<div class="card file-row"><div class="file-icon">PDF</div><div class="file-info"><strong>${p.file.name}</strong><span>${p.file.meta} · From ${p.author}</span></div><button class="download" data-action="download">${icon('download')}</button></div>`).join(''):`<div class="card empty"><div class="channel-icon">${icon('paperclip')}</div><h3>No files yet</h3><p>Files shared in this channel will appear here.</p></div>`)
-    : state.channelTab==='about'
-      ? `<section class="card section-card"><h3>About this channel</h3><p>${channel.desc||'No description provided.'}</p><div class="settings-row">${creator?avatar(creator):avatar({initials:'SL'})}<span><strong>Created by ${escapeHtml(creator?.name||'StudyLoop member')}</strong><small class="muted">${escapeHtml(createdDate)}</small></span></div><div class="settings-row">${icon(channel.access==='Private'?'bookmark':'users')}<span>${channel.access} channel${channel.course?` · ${channel.course}`:''}${channel.sub?` · ${channel.sub}`:''}</span></div></section>`
-      : (channelPosts.length?channelPosts.map(postCard).join(''):`<div class="card empty"><div class="channel-icon ${channel.cls}">${channel.icon}</div><h3>No posts yet</h3><p>Start the conversation in this channel.</p><button class="primary" data-action="channel-post">New post</button></div>`);
-  return shell(`<div class="stack"><button class="back-link" data-nav="channels">${icon('arrow')} Back to channels</button><section class="card channel-hero"><div class="channel-icon ${channel.cls}">${channel.icon}</div><div class="channel-hero-copy"><h2>${channel.name}</h2><p>${channel.desc}</p><div class="channel-tags"><span class="public">◉ ${channel.access}</span>${channel.sub?`<span>•</span><span>${channel.sub}</span>`:''}</div></div>${joined?`<button class="secondary" data-leave="${state.activeChannel}">Leave</button>`:`<button class="primary" data-join="${state.activeChannel}">Join</button>`}</section><div class="channel-tabs"><button class="${state.channelTab==='posts'?'active':''}" data-channel-tab="posts">Posts</button><button class="${state.channelTab==='files'?'active':''}" data-channel-tab="files">Files</button><button class="${state.channelTab==='about'?'active':''}" data-channel-tab="about">About</button></div><div class="stack">${body}</div>${joined&&state.channelTab==='posts'?`<button class="new-post-bar" data-action="channel-post" aria-label="Create a post" title="Create a post">${icon('plus')}</button>`:''}</div>`,'Channel',false);
+  const tabBody=state.channelTab==='files'
+    ? `<div class="stack channel-tab-content">${files.length?files.map(post=>`<div class="card file-row"><div class="file-icon">${baseMimeType(post.file.type)==='application/pdf'?'PDF':'FILE'}</div><div class="file-info"><strong>${escapeHtml(post.file.name)}</strong><span>${escapeHtml(post.file.meta||'Document')} · From ${escapeHtml(post.author)}</span></div>${safeAssetUrl(post.file.url)?`<a class="download" href="${safeAssetUrl(post.file.url)}" download="${escapeHtml(post.file.name)}">${icon('download')}</a>`:''}</div>`).join(''):`<div class="card empty"><h3>No files yet</h3><p>Documents shared in this channel will appear here.</p></div>`}</div>`
+    : `<div class="stack channel-tab-content"><section class="card section-card channel-info-sheet"><div class="channel-info-identity"><div class="channel-icon ${channel.cls}">${channel.icon}</div><h2>${channel.name}</h2><span>${channel.access} · ${Number(channelRaw.members)||0} members</span></div><p class="channel-info-description">${escapeHtml(channelRaw.desc||'No description provided.')}</p><button class="settings-row" data-channel-tab="files">${icon('paperclip')}<span><strong>Shared files</strong><small class="muted">${files.length} document${files.length===1?'':'s'}</small></span>${icon('chevron','i-right')}</button><div class="settings-row">${creator?avatar(creator):avatar({initials:'SL'})}<span><strong>Created by ${escapeHtml(creator?.name||'StudyLoop member')}</strong><small class="muted">${escapeHtml(createdDate)}</small></span></div><div class="settings-row">${icon(channelRaw.access==='Private'?'bookmark':'users')}<span>${channel.access} channel${channelRaw.course?` · ${escapeHtml(channelRaw.course)}`:''}${channelRaw.sub?` · ${channel.sub}`:''}</span></div>${joined?`<button class="secondary danger-action" data-leave="${state.activeChannel}">Leave channel</button>`:`<button class="primary" data-join="${state.activeChannel}">Join channel</button>`}</section></div>`;
+  const postsMarkup=channelPosts.length?channelTimeline(channelPosts):`<div class="channel-conversation-empty"><div class="channel-icon ${channel.cls}">${channel.icon}</div><h3>No posts yet</h3><p>Start the conversation in this channel.</p></div>`;
+  const body=state.channelTab==='posts'?`<section class="channel-conversation"><div class="channel-messages">${postsMarkup}</div><button class="channel-jump-bottom" data-action="channel-jump-bottom" aria-label="Jump to latest">${icon('chevron')}</button>${channelComposer(channelRaw,joined)}</section>`:tabBody;
+  return shell(`<div class="channel-view"><header class="channel-chat-head"><button class="icon-btn" ${state.channelTab==='posts'?'data-nav="channels" aria-label="Back to channels"':'data-channel-tab="posts" aria-label="Back to posts"'}>${icon('arrow')}</button>${state.channelSearchOpen?`<label class="channel-inline-search">${icon('search')}<input id="channel-message-search" autocomplete="off" placeholder="Search this channel" value="${escapeHtml(state.channelMessageSearch)}" /></label><button class="icon-btn" data-action="close-channel-search" aria-label="Close search">${icon('x')}</button>`:`<div class="channel-icon ${channel.cls}">${channel.icon}</div><button class="channel-chat-title" data-channel-tab="about"><strong>${channel.name}</strong><span>${channel.access} channel · ${Number(channelRaw.members)||0} members</span></button>${state.channelTab==='posts'?`<button class="icon-btn" data-action="open-channel-search" aria-label="Search channel">${icon('search')}</button>`:''}<button class="icon-btn" data-channel-tab="about" aria-label="Channel information">${icon('more')}</button>`}</header><div class="channel-tabs"><button class="${state.channelTab==='posts'?'active':''}" data-channel-tab="posts">Posts</button><button class="${state.channelTab==='files'?'active':''}" data-channel-tab="files">Files</button><button class="${state.channelTab==='about'?'active':''}" data-channel-tab="about">About</button></div>${body}</div>`,'Channel',false);
 }
 
 function friendsPage() {
@@ -355,13 +587,14 @@ function friendsPage() {
 
 function postDetailPage() {
   const post=posts.find(p=>p.id===state.activePost)||posts[0];
+  if(!post)return shell(`<div class="telegram-empty"><h3>Post unavailable</h3><p>This post may have been removed.</p></div>`,'Replies',false);
   const comments=discussionComments[post.id]||[];
   const ids=new Set(comments.map(comment=>comment.id));
-  const renderComment=(c,isReply=false)=>`<article class="comment ${isReply?'comment-reply':''}">${avatar({name:c.name,photoURL:c.authorPhotoURL,initials:c.initials})}<div class="comment-copy"><div class="comment-heading"><strong>${escapeHtml(c.name)}</strong><span>${escapeHtml(c.ago||'now')}</span>${c.authorId===state.userId?`<button class="comment-delete" data-delete-comment="${escapeHtml(c.id)}" aria-label="Delete comment">Delete</button>`:''}</div>${c.text?`<p>${escapeHtml(c.text)}</p>`:''}${safeAssetUrl(c.imageURL)?`<img class="comment-image" src="${safeAssetUrl(c.imageURL)}" alt="Comment attachment" data-action="zoom-image" />`:''}${safeAssetUrl(c.audioURL)?`<audio controls src="${safeAssetUrl(c.audioURL)}"></audio>`:''}${!isReply&&c.id?`<button class="comment-reply-button" data-action="reply-comment" data-reply-comment="${escapeHtml(c.id)}">Reply</button>`:''}</div></article>`;
+  const renderComment=(c,isReply=false)=>{const authorIndex=people.findIndex(person=>person.id===c.authorId);return `<article class="discussion-message ${isReply?'comment-reply':''}">${avatar({name:c.name,photoURL:c.authorPhotoURL,initials:c.initials})}<div class="discussion-bubble"><div class="comment-heading">${authorIndex>=0?`<button data-profile="${authorIndex}">${escapeHtml(c.name)}</button>`:`<strong>${escapeHtml(c.name)}</strong>`}${c.authorId===state.userId?`<button class="comment-more" data-delete-comment="${escapeHtml(c.id)}" aria-label="Delete comment">${icon('more')}</button>`:''}</div>${c.text?`<p>${escapeHtml(c.text)}</p>`:''}${safeAssetUrl(c.imageURL)?`<img class="comment-image" src="${safeAssetUrl(c.imageURL)}" alt="Comment attachment" data-action="zoom-image" />`:''}${safeAssetUrl(c.audioURL)?voiceNotePlayer(c.audioURL,0,'voice comment'):''}<div class="discussion-message-footer">${!isReply&&c.id?`<button data-action="reply-comment" data-reply-comment="${escapeHtml(c.id)}">Reply</button>`:''}<span>${escapeHtml(c.ago||relativeTime(c.createdAt))}</span></div></div></article>`;};
   const roots=comments.filter(comment=>!comment.parentId||!ids.has(comment.parentId));
-  const commentHtml=roots.map(root=>`<section class="comment-thread">${renderComment(root)}${comments.filter(reply=>reply.parentId===root.id).map(reply=>renderComment(reply,true)).join('')}</section>`).join('');
-  const replyNotice=state.replyToCommentId?`<div class="reply-notice">Replying to a comment <button type="button" data-action="cancel-reply">Cancel</button></div>`:'';
-  return shell(`<div class="stack"><button class="back-link" data-nav="home">${icon('arrow')} Back to feed</button>${postCard(post)}<section class="card discussion-card"><div class="section-title"><h3>Discussion · ${comments.length} comments</h3><button class="link-btn">Newest</button></div><div class="comment-list">${commentHtml}</div>${replyNotice}<form id="comment-form" class="comment-compose"><input name="comment" autocomplete="off" placeholder="${state.replyToCommentId?'Write a reply…':'Write a comment…'}" /><label class="action comment-upload">${icon('paperclip')}<input type="file" name="commentImage" accept="image/jpeg,image/png,image/webp" hidden /></label><button type="button" class="action" data-action="record-comment-voice" aria-label="Record voice comment">${icon('mic')}</button><audio id="comment-voice-preview" controls hidden></audio><button type="button" class="message-delete" data-action="discard-comment-voice" hidden>Discard</button><button class="send-btn" aria-label="Post comment">${icon('send')}</button></form></section></div>`,'Discussion',false);
+  const commentHtml=roots.map(root=>`<section class="discussion-thread">${renderComment(root)}${comments.filter(reply=>reply.parentId===root.id).map(reply=>renderComment(reply,true)).join('')}</section>`).join('');
+  const replyNotice=state.replyToCommentId?`<div class="compose-reply discussion-reply-notice"><span><b>Replying to a comment</b><small>Replies are limited to one level.</small></span><button type="button" data-action="cancel-reply">${icon('x')}</button></div>`:'';
+  return shell(`<div class="discussion-view"><header class="discussion-head"><button class="icon-btn" data-nav="home" aria-label="Back to feed">${icon('arrow')}</button><span><strong>Replies</strong><small>${comments.length} comment${comments.length===1?'':'s'}</small></span><button class="icon-btn" data-action="share" data-post="${escapeHtml(post.id)}" aria-label="Share post">${icon('share')}</button></header><div class="discussion-scroll"><div class="discussion-original">${postCard(post)}</div><div class="discussion-divider"><span>${comments.length?'Replies':'No replies yet'}</span></div><div class="discussion-list">${commentHtml||`<div class="telegram-empty compact-empty"><p>Be the first to reply.</p></div>`}</div></div>${replyNotice}<form id="comment-form" class="comment-compose telegram-comment-compose"><label class="action comment-upload">${icon('paperclip')}<input type="file" name="commentImage" accept="image/jpeg,image/png,image/webp" hidden /></label><input name="comment" autocomplete="off" maxlength="2000" placeholder="${state.replyToCommentId?'Write a reply…':'Write a comment…'}" /><button type="button" class="action" data-action="record-comment-voice" aria-label="Record voice comment">${icon('mic')}</button><audio id="comment-voice-preview" controls hidden></audio><button type="button" class="voice-comment-discard" data-action="discard-comment-voice" hidden>${icon('x')}</button><button class="send-btn" aria-label="Post comment">${icon('send')}</button></form></div>`,'Replies',false);
 }
 
 function notificationsPage() {
@@ -416,6 +649,7 @@ function render() {
   const pages={landing:landingPage,home:homePage,channels:channelsPage,messages:messagesPage,friends:friendsPage,saved:savedPage,pricing:pricingPage,profile:profilePage,settings:settingsPage,terms:()=>legalPage('terms'),privacy:()=>legalPage('privacy'),'user-profile':userProfilePage,'channel-detail':channelDetailPage,'post-detail':postDetailPage,notifications:notificationsPage};
   $('#app').innerHTML=(pages[state.page]||homePage)();
   if(state.page==='messages') requestAnimationFrame(()=>{const c=$('#chat-messages');if(c)c.scrollTop=c.scrollHeight;});
+  if(state.page==='channel-detail'&&scrollChannelToLatest)requestAnimationFrame(()=>{const c=$('.channel-messages');if(c)c.scrollTop=c.scrollHeight;scrollChannelToLatest=false;});
 }
 
 function usageSummaryHtml(){
@@ -451,7 +685,7 @@ document.addEventListener('click',e=>{
   const friendTab=e.target.closest('[data-friend-tab]'); if(friendTab){state.friendTab=friendTab.dataset.friendTab;render();return;}
   const requestAction=e.target.closest('[data-request-action]'); if(requestAction){respondToFriendRequest(requestAction.dataset.requestId,requestAction.dataset.requestAction).then(()=>notify(requestAction.dataset.requestAction==='accepted'?'Friend request accepted':'Friend request declined')).catch(error=>notify(userFacingError(error,'Unable to update this request.')));return;}
   const discoverAdd=e.target.closest('[data-discover-add]'); if(discoverAdd){const userId=discoverAdd.dataset.discoverAdd;const person=people.find(item=>item.id===userId);sendFriendRequest(state.userId,userId).then(()=>notify(`Friend request sent to ${person?.name||'this user'}`)).catch(error=>notify(userFacingError(error,'Unable to send this friend request.')));return;}
-  const chat=e.target.closest('[data-chat]'); if(chat){if(guestNeedsSignIn('Sign in to read and send private messages.'))return;state.activeChat=+chat.dataset.chat;state.chatOpen=true;const selected=chats[state.activeChat];if(selected){selected.unread=0;state.unreadMessageIds.clear();}subscribeActiveMessages();render();return;}
+  const chat=e.target.closest('[data-chat]'); if(chat){if(guestNeedsSignIn('Sign in to read and send private messages.'))return;state.activeChat=+chat.dataset.chat;state.chatOpen=true;const selected=chats[state.activeChat];if(selected){selected.unread=0;const selectedConversation=conversationIdFor();inboxMessages.filter(message=>message.conversationId===selectedConversation).forEach(message=>state.unreadMessageIds.delete(message.id));}subscribeActiveMessages();render();return;}
   const savedChat=e.target.closest('[data-saved-chat]'); if(savedChat){if(guestNeedsSignIn('Sign in to access Saved Messages.'))return;state.activeChat=0;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const personChat=e.target.closest('[data-person-chat]'); if(personChat){if(guestNeedsSignIn('Sign in to message classmates.'))return;state.activeChat=+personChat.dataset.personChat+1;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const profile=e.target.closest('[data-profile]'); if(profile){state.profileUser=+profile.dataset.profile;state.page='user-profile';render();return;}
@@ -463,7 +697,7 @@ document.addEventListener('click',e=>{
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
   const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
   const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];if(channel.ownerId===state.userId){notify('Channel owners must remove members before leaving.');return;}setMembership(state.userId,channel.id,false).then(()=>notify(`Left ${channel.name}`)).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
-  const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';render();return;}
+  const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';scrollChannelToLatest=true;render();return;}
   const deleteComment=e.target.closest('[data-delete-comment]');
   if(deleteComment){const comment=(discussionComments[state.activePost]||[]).find(item=>item.id===deleteComment.dataset.deleteComment);if(comment?.authorId!==state.userId){notify('You can only delete your own comment.');return;}if(confirm('Delete this comment?'))Promise.all([deleteCloudComment(state.activePost,comment.id),deleteUploadedAsset(comment.imageURL).catch(()=>{}),deleteUploadedAsset(comment.audioURL).catch(()=>{})]).then(()=>notify('Comment deleted')).catch(error=>notify(userFacingError(error,'Unable to delete this comment.')));return;}
   const deleteMessage=e.target.closest('[data-delete-message]');
@@ -477,13 +711,29 @@ document.addEventListener('click',e=>{
   const editMessage=e.target.closest('[data-edit-message]');
   if(editMessage){const current=editMessage.closest('.bubble')?.childNodes?.[0]?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
   const action=e.target.closest('[data-action]'); if(!action)return;
-  if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)localStorage.setItem('studyloop_apk_prompt_dismissed','1');prompt?.remove();return;}
-  if(action.dataset.action==='download-apk'){localStorage.setItem('studyloop_apk_prompt_dismissed','1');return;}
+  if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)persistApkDismissal();prompt?.remove();return;}
+  if(action.dataset.action==='download-apk'){persistApkDismissal();return;}
   const post=action.closest('[data-post]');
+  if(action.dataset.action==='message-menu'){
+    const bubble=action.closest('[data-message-id]');const messageId=bubble?.dataset.messageId;const source=inboxMessages.find(message=>String(message.id)===String(messageId));if(!source)return;
+    const own=source.senderId===state.userId;const attachment=source.type==='attachment';
+    document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop message-menu-backdrop" data-action="close-modal" data-message-id="${escapeHtml(messageId)}"><div class="post-menu"><button class="secondary" data-action="reply-message">${icon('chat')} Reply</button>${own&&source.type==='text'?`<button class="secondary" data-action="edit-message-menu">Edit message</button>`:''}${attachment?`<button class="secondary" data-action="forward-message-menu">${icon('share')} Forward</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-message-menu">Delete message</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;
+  }
+  if(['reply-message','edit-message-menu','forward-message-menu','delete-message-menu'].includes(action.dataset.action)){
+    const menu=action.closest('[data-message-id]');const messageId=menu?.dataset.messageId;const source=inboxMessages.find(message=>String(message.id)===String(messageId));if(!source)return;
+    if(action.dataset.action==='reply-message'){const sender=source.senderId===state.userId?state.profileName:(people.find(person=>person.id===source.senderId)?.name||'StudyLoop member');state.replyToMessage={id:messageId,sender,text:source.text||source.file?.name||'Attachment'};menu.remove();render();setTimeout(()=>$('#message-input')?.focus(),0);return;}
+    if(action.dataset.action==='edit-message-menu'){const next=prompt('Edit message',source.text||'')?.trim();if(next&&next!==source.text)updateCloudMessage(messageId,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));menu.remove();return;}
+    if(action.dataset.action==='forward-message-menu'){menu.remove();document.body.insertAdjacentHTML('beforeend',attachmentForwardModal(messageId));return;}
+    if(action.dataset.action==='delete-message-menu'){if(confirm('Delete this message?'))deleteCloudMessage(messageId).catch(error=>notify(userFacingError(error,'Unable to delete this message.')));menu.remove();return;}
+  }
   if(action.dataset.action==='zoom-image'){document.body.insertAdjacentHTML('beforeend',`<div class="image-lightbox" data-action="close-modal"><img src="${action.src}" alt="Expanded attachment" /></div>`);return;}
-  if(action.dataset.action==='more'&&post){const item=posts.find(p=>String(p.id)===String(post.dataset.post));const own=item&&item.authorId===state.userId;const downloadable=Boolean(safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop post-menu-backdrop" data-action="close-modal" data-post-id="${post.dataset.post}"><div class="post-menu">${downloadable?`<button class="secondary" data-action="download-post">${icon('download')} Download</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-post">Delete post</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
+  if(action.dataset.action==='channel-jump-bottom'){const list=action.closest('.channel-conversation')?.querySelector('.channel-messages');list?.scrollTo({top:list.scrollHeight,behavior:'smooth'});return;}
+  if(action.dataset.action==='open-channel-search'){state.channelSearchOpen=true;render();setTimeout(()=>$('#channel-message-search')?.focus(),0);return;}
+  if(action.dataset.action==='close-channel-search'){state.channelSearchOpen=false;state.channelMessageSearch='';render();return;}
+  if(action.dataset.action==='more'&&post){const item=posts.find(p=>String(p.id)===String(post.dataset.post));const own=item&&item.authorId===state.userId;const downloadable=Boolean(safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL));const saved=item&&state.saved.has(String(item.id));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop post-menu-backdrop" data-action="close-modal" data-post-id="${post.dataset.post}"><div class="post-menu"><button class="secondary" data-action="save-menu">${icon('bookmark')} ${saved?'Remove from Saved Messages':'Save to Saved Messages'}</button><button class="secondary" data-action="share-menu">${icon('share')} Forward</button>${downloadable?`<button class="secondary" data-action="download-post">${icon('download')} Download</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-post">Delete post</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
   if(action.dataset.action==='sign-in'){openAuthModal();return;}
-  if(action.dataset.action==='toggle-block-user'){const userId=action.dataset.userId;const blocked=state.blockedUsers.has(userId);setUserBlocked(state.userId,userId,!blocked).then(()=>notify(blocked?'User unblocked':'User blocked')).catch(error=>notify(userFacingError(error,'Unable to update this block.')));return;}
+  if(action.dataset.action==='chat-options'){const userId=action.dataset.userId;const blocked=state.blockedUsers.has(userId);document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" data-action="close-modal"><div class="post-menu chat-options-menu"><button class="secondary ${blocked?'':'danger-action'}" data-action="toggle-block-user" data-user-id="${escapeHtml(userId)}">${blocked?'Unblock user':'Block user'}</button><button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
+  if(action.dataset.action==='toggle-block-user'){const userId=action.dataset.userId;const blocked=state.blockedUsers.has(userId);action.closest('.modal-backdrop')?.remove();setUserBlocked(state.userId,userId,!blocked).then(()=>notify(blocked?'User unblocked':'User blocked')).catch(error=>notify(userFacingError(error,'Unable to update this block.')));return;}
   if(action.dataset.action==='password-reset'){sendPasswordReset(state.userEmail).then(()=>notify('Password reset email sent')).catch(error=>notify(userFacingError(error,'Unable to send reset email.')));return;}
   if(action.dataset.action==='deactivate-account'){if(!confirm('Deactivate your account? You will be signed out.'))return;deactivateUser(state.userId).then(()=>signOutUser()).then(()=>{resetPrivateState();state.isAuthenticated=false;state.userId='';state.userEmail='';state.page='landing';render();notify('Account deactivated');}).catch(error=>notify(userFacingError(error,'Unable to deactivate account.')));return;}
   if(action.dataset.action==='logout'){signOutUser().then(()=>{resetPrivateState();state.isAuthenticated=false;state.isGuest=false;state.userId='';state.userEmail='';state.profileName='';state.profilePhotoURL='';state.page='landing';render();notify('You have been logged out');}).catch(error=>notify(userFacingError(error,'Unable to log out.')));return;}
@@ -491,10 +741,45 @@ document.addEventListener('click',e=>{
   if(['save','share','create-channel','upload-saved','upload-file','share-saved','channel-post','add-friend','edit-profile','notifications'].includes(action.dataset.action)&&guestNeedsSignIn('Sign in to participate in StudyLoop.')) return;
   if(action.dataset.action==='report-post'&&post){report('post',String(post.dataset.post),'User report',state.userId).then(()=>notify('Post reported')).catch(error=>notify(userFacingError(error,'Unable to submit this report.')));return;}
   if(action.dataset.action==='download-post'){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));const url=safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL);if(url){const link=document.createElement('a');link.href=url;link.download=item?.file?.name||'studyloop-download';link.click();}else notify('No downloadable attachment found.');menu?.remove();return;}
+  if(action.dataset.action==='save-menu'){const menu=action.closest('[data-post-id]');const id=String(menu?.dataset.postId||'');const item=posts.find(entry=>String(entry.id)===id);const willSave=!state.saved.has(id);const savedPost=item?{id:String(item.id),course:item.course,author:item.author,authorId:item.authorId||'',text:item.text||'',imageURL:item.imageURL||null,audioURL:item.audioURL||null,file:item.file||null}:null;Promise.all([setSavedPost(state.userId,id,willSave),willSave&&savedPost?saveCloudMessage({conversationId:`saved_${state.userId}`,participants:[state.userId],senderId:state.userId,type:'savedPost',text:'Saved post',postId:id,post:savedPost}):Promise.resolve()]).then(()=>{menu?.remove();notify(willSave?'Saved to Saved Messages':'Bookmark removed');}).catch(error=>notify(userFacingError(error,'Unable to update Saved Messages.')));return;}
+  if(action.dataset.action==='share-menu'){const menu=action.closest('[data-post-id]');state.sharePostId=String(menu?.dataset.postId||'');menu?.remove();document.body.insertAdjacentHTML('beforeend',shareModal(state.sharePostId));return;}
   if(action.dataset.action==='delete-post'&&!post){const menu=action.closest('[data-post-id]');const item=posts.find(p=>String(p.id)===String(menu?.dataset.postId));if(item?.authorId===state.userId){deletePostAndAttachments(item).then(()=>{const index=posts.indexOf(item);if(index>=0)posts.splice(index,1);menu?.remove();render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));}return;}
   if(action.dataset.action==='delete-post'&&post){const item=posts.find(entry=>String(entry.id)===String(post.dataset.post));if(item?.authorId===state.userId)deletePostAndAttachments(item).then(()=>{state.page='home';render();notify('Post deleted');}).catch(error=>notify(userFacingError(error,'Unable to delete post.')));return;}
   if(action.dataset.action==='upload-saved'||action.dataset.action==='upload-file'){const input=$('#file-upload');input.accept=UPLOAD_ACCEPT;input.dataset.destination=state.page==='messages'&&state.activeChat!==0?'chat':'saved';input.click();return;}
   if(action.dataset.action==='channel-post'){state.recordedAudio=null;document.body.insertAdjacentHTML('beforeend',postComposerModal());return;}
+  if(action.dataset.action==='record-channel-voice'){
+    if(guestNeedsSignIn('Sign in to record a voice note.'))return;
+    startChannelVoiceRecording().catch(error=>notify(error?.code==='media/unsupported'?'Voice recording is not supported in this browser.':'Microphone permission is needed to record a voice note.'));
+    return;
+  }
+  if(action.dataset.action==='pause-channel-voice'){
+    if(activeRecorder?.state==='recording'){activeRecorder.pause();state.channelRecordingPaused=true;action.classList.add('is-paused');action.setAttribute('aria-label','Resume recording');}
+    else if(activeRecorder?.state==='paused'){activeRecorder.resume();state.channelRecordingPaused=false;action.classList.remove('is-paused');action.setAttribute('aria-label','Pause recording');}
+    return;
+  }
+  if(action.dataset.action==='finish-channel-voice'){
+    if(activeRecorder&&['recording','paused'].includes(activeRecorder.state))activeRecorder.stop();
+    return;
+  }
+  if(action.dataset.action==='discard-channel-voice'){
+    if(activeRecorder&&['recording','paused'].includes(activeRecorder.state)){discardActiveRecording=true;activeRecorder.stop();}
+    else clearChannelVoice();
+    return;
+  }
+  if(action.dataset.action==='play-channel-preview'){
+    const audio=$('#channel-voice-preview');if(!audio?.src)return;
+    if(audio.paused){audio.play();action.classList.add('is-playing');}else{audio.pause();action.classList.remove('is-playing');}
+    audio.onended=()=>action.classList.remove('is-playing');
+    return;
+  }
+  if(action.dataset.action==='toggle-voice-note'){
+    const player=action.closest('[data-voice-player]');const audio=player?.querySelector('audio');if(!audio)return;
+    $$('[data-voice-player] audio').filter(item=>item!==audio).forEach(item=>{item.pause();const other=item.closest('[data-voice-player]');other?.querySelector('.voice-play')?.classList.remove('is-playing');other?.classList.remove('is-playing');});
+    if(audio.paused){audio.play();action.classList.add('is-playing');player.classList.add('is-playing');}else{audio.pause();action.classList.remove('is-playing');player.classList.remove('is-playing');}
+    const sync=()=>{const duration=Number.isFinite(audio.duration)?audio.duration:0;const progress=duration?audio.currentTime/duration:0;player.style.setProperty('--voice-progress',`${progress*100}%`);const time=player.querySelector('[data-voice-time]');if(time)time.textContent=formatMediaTime(audio.currentTime||duration);};
+    audio.onloadedmetadata=sync;audio.ontimeupdate=sync;audio.onended=()=>{action.classList.remove('is-playing');player.classList.remove('is-playing');player.style.setProperty('--voice-progress','0%');const time=player.querySelector('[data-voice-time]');if(time)time.textContent=formatMediaTime(Number.isFinite(audio.duration)?audio.duration:0);};
+    return;
+  }
   if(action.dataset.action==='record-voice'){
     if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     const status=$('#voice-status'); const preview=$('#voice-preview');
@@ -507,17 +792,19 @@ document.addEventListener('click',e=>{
     }).catch(()=>notify('Microphone permission is needed to record a voice note.'));
     return;
   }
-  if(action.dataset.action==='discard-chat-voice'){if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';render();return;}
+  if(action.dataset.action==='discard-chat-voice'){if(activeRecorder&&['recording','paused'].includes(activeRecorder.state)){discardActiveRecording=true;activeRecorder.stop();}else clearChatVoice();return;}
+  if(action.dataset.action==='pause-chat-voice'){if(activeRecorder?.state==='recording'){activeRecorder.pause();state.chatRecordingPaused=true;action.classList.add('is-paused');}else if(activeRecorder?.state==='paused'){activeRecorder.resume();state.chatRecordingPaused=false;action.classList.remove('is-paused');}return;}
+  if(action.dataset.action==='finish-chat-voice'){if(activeRecorder&&['recording','paused'].includes(activeRecorder.state))activeRecorder.stop();return;}
+  if(action.dataset.action==='play-chat-preview'){const audio=$('#chat-voice-preview');if(!audio?.src)return;if(audio.paused){audio.play();action.classList.add('is-playing');}else{audio.pause();action.classList.remove('is-playing');}audio.onended=()=>action.classList.remove('is-playing');return;}
+  if(action.dataset.action==='cancel-message-reply'){state.replyToMessage=null;render();return;}
   if(action.dataset.action==='discard-comment-voice'){const preview=$('#comment-voice-preview');if(preview?.src)URL.revokeObjectURL(preview.src);state.commentAudio=null;if(preview){preview.removeAttribute('src');preview.hidden=true;}action.hidden=true;notify('Voice comment discarded');return;}
   if(action.dataset.action==='record-chat-voice'){
-    if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
-    if(activeRecorder?.state==='recording'){activeRecorder.stop();action.disabled=true;return;}
-    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.title='Recording - tap to stop';activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());action.classList.remove('recording');state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudioURL=URL.createObjectURL(state.chatAudio);render();notify('Listen to the voice note, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
+    startChatVoiceRecording().catch(()=>notify('Microphone permission is needed to record a voice note.'));return;
   }
   if(action.dataset.action==='record-comment-voice'){
     if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     if(activeRecorder?.state==='recording'){activeRecorder.stop();action.textContent='Processing…';return;}
-    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.setAttribute('aria-label','Stop recording');activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());state.commentAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});action.classList.remove('recording');action.setAttribute('aria-label','Record again');const preview=$('#comment-voice-preview');const discard=$('[data-action="discard-comment-voice"]');if(preview){preview.src=URL.createObjectURL(state.commentAudio);preview.hidden=false;}if(discard)discard.hidden=false;notify('Listen to your voice comment, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.setAttribute('aria-label','Stop recording');activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());state.commentAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});action.classList.remove('recording');action.innerHTML=icon('mic');action.setAttribute('aria-label','Record again');const preview=$('#comment-voice-preview');const discard=$('[data-action="discard-comment-voice"]');if(preview){preview.src=URL.createObjectURL(state.commentAudio);preview.hidden=false;}if(discard)discard.hidden=false;notify('Listen to your voice comment, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
   }
   if(action.dataset.action==='share-saved'){state.sharePostId=state.activePost;document.body.insertAdjacentHTML('beforeend',shareModal(state.sharePostId));return;}
   if(action.dataset.action==='edit-profile'){document.body.insertAdjacentHTML('beforeend',profileEditorModal());return;}
@@ -547,11 +834,14 @@ document.addEventListener('click',e=>{
 
 document.addEventListener('input',e=>{
   if(e.target.id==='channel-search'){state.channelSearch=e.target.value;const caret=e.target.selectionStart;render();const input=$('#channel-search');input.focus();input.setSelectionRange(caret,caret);}
+  if(e.target.id==='channel-message-search'){state.channelMessageSearch=e.target.value;const caret=e.target.selectionStart;render();const input=$('#channel-message-search');input?.focus();input?.setSelectionRange(caret,caret);}
+  if(e.target.id==='message-input')localStorage.setItem(`studyloop-draft:${state.userId}:${conversationIdFor()}`,e.target.value);
+  if(e.target.id==='conversation-search'){state.chatSearch=e.target.value;const caret=e.target.selectionStart;render();const input=$('#conversation-search');input?.focus();input?.setSelectionRange(caret,caret);}
 });
 
 document.addEventListener('submit',async e=>{
   if(e.target.id==='auth-form'){e.preventDefault();const data=new FormData(e.target);if(state.authMode==='signup'&&!data.get('terms')){notify('Accept the Terms & Conditions to create your account.');return;}try{const user=state.authMode==='signup'?await signUp(data.get('username'),data.get('email'),data.get('password')):await signIn(data.get('email'),data.get('password'));state.userEmail=user.email;await loadAccountEntitlement(user.uid);state.profileName=state.authMode==='signup'?String(data.get('username')||'').trim():state.profileName;state.isGuest=false;state.isAuthenticated=true;$('.auth-backdrop')?.remove();state.page='home';state.chatOpen=false;notify('Signed in successfully');render();}catch(error){notify(userFacingError(error,'Unable to sign in.'));}}
-  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input.value.trim();if(!value&&!state.chatAudio)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];try{if(peer&&!relationFor(peer.id))await sendFriendRequest(state.userId,peer.id).catch(error=>{if(error?.code!=='permission-denied')throw error;});if(state.chatAudio){const name=`voice-${Date.now()}.webm`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'attachment',text:'Voice note',file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url}});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';}if(value)await saveCloudMessage({conversationId:conversationIdFor(),participants,senderId:state.userId,type:'text',text:value});input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
+  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input?.value.trim()||'';if(!value&&!state.chatAudio)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];const conversationId=conversationIdFor();const replyTo=state.replyToMessage?{id:String(state.replyToMessage.id),sender:String(state.replyToMessage.sender).slice(0,80),text:String(state.replyToMessage.text).slice(0,300)}:null;try{if(peer&&!relationFor(peer.id))await sendFriendRequest(state.userId,peer.id).catch(error=>{if(error?.code!=='permission-denied')throw error;});if(state.chatAudio){const extension=baseMimeType(state.chatAudio.type)==='audio/mp4'?'m4a':'webm';const name=`voice-${Date.now()}.${extension}`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'attachment',text:'Voice note',file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url,duration:state.chatAudioDuration},...(replyTo?{replyTo}:{})});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';state.chatAudioDuration=0;}if(value)await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'text',text:value,...(replyTo?{replyTo}:{})});localStorage.removeItem(`studyloop-draft:${state.userId}:${conversationId}`);state.replyToMessage=null;if(input)input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
   if(e.target.id==='channel-form'){
     e.preventDefault();
     if(guestNeedsSignIn('Sign in to create a channel.'))return;
@@ -580,6 +870,25 @@ document.addEventListener('submit',async e=>{
       submit.disabled=false;
     }
   }
+  if(e.target.id==='channel-compose-form'){
+    e.preventDefault();if(guestNeedsSignIn('Sign in to publish a post.'))return;
+    const data=new FormData(e.target);const text=String(data.get('channelText')||'').trim();const assets=data.getAll('channelAssets').filter(file=>file instanceof File&&file.size);
+    const kinds=assets.map(uploadKind);
+    if(assets.length>3||assets.some((file,index)=>file.size>50*1024*1024||!kinds[index])||new Set(kinds).size!==kinds.length){notify('Use up to one image, one document, and one audio file, each 50 MB or smaller. Videos are not accepted.');return;}
+    if(!text&&!assets.length&&!state.recordedAudio){notify('Write a message, attach a file, or record a voice note.');return;}
+    const channel=channels[state.activeChannel];if(!channel||!state.joined.has(state.activeChannel)){notify('Join this channel before publishing.');return;}
+    const submit=e.submitter||e.target.querySelector('.channel-send-text');submit.disabled=true;e.target.classList.add('is-publishing');
+    const uploaded=[];
+    try{
+      const id=crypto.randomUUID();const image=assets.find(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFile=assets.find(file=>uploadKind(file)==='document');
+      let imageURL=null,audioURL=null,fileURL=null;
+      if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
+      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${baseMimeType(audio.type).includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
+      if(documentFile){fileURL=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(fileURL);}
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,audioDuration:state.recordedAudioDuration||0,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
+      await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
+    }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));submit.disabled=false;e.target.classList.remove('is-publishing');notify(userFacingError(error,'Unable to publish your post.'));}
+  }
   if(e.target.id==='post-form'){
     e.preventDefault();if(guestNeedsSignIn('Sign in to publish a post.'))return;
     const data=new FormData(e.target);const text=String(data.get('postText')||'').trim();const assets=data.getAll('assets').filter(file=>file instanceof File&&file.size);
@@ -595,16 +904,25 @@ document.addEventListener('submit',async e=>{
       if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audio.type.includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
       if(documentFile){fileURL=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(fileURL);}
-      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,audioDuration:state.recordedAudioDuration||0,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(userFacingError(error,'Unable to publish your post.'));}
   }
-  if(e.target.id==='comment-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to comment on this discussion.'))return;const data=new FormData(e.target);const text=String(data.get('comment')||'').trim();const image=data.get('commentImage');if(!text&&!(image instanceof File&&image.size)&&!state.commentAudio){notify('Add text, a picture, or a voice note.');return;}try{const postId=String(state.activePost);const commentId=String(Date.now());const [imageURL,audioURL]=await Promise.all([image instanceof File&&image.size?uploadAsset(image,`users/${state.userId}/comments/${postId}/${commentId}-${safeStorageName(image)}`):null,state.commentAudio?uploadAsset(new File([state.commentAudio],`${commentId}.webm`,{type:state.commentAudio.type}),`users/${state.userId}/comments/${postId}/${commentId}.webm`):null]);await saveCloudComment(postId,{authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId:state.replyToCommentId||null});state.commentAudio=null;state.replyToCommentId=null;e.target.reset();notify('Comment posted');}catch(error){notify(userFacingError(error,'Unable to post this comment.'));}}
+  if(e.target.id==='comment-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to comment on this discussion.'))return;const data=new FormData(e.target);const text=String(data.get('comment')||'').trim();const image=data.get('commentImage');if(!text&&!(image instanceof File&&image.size)&&!state.commentAudio){notify('Add text, a picture, or a voice note.');return;}try{const postId=String(state.activePost);const commentId=String(Date.now());const parentId=state.replyToCommentId||null;const [imageURL,audioURL]=await Promise.all([image instanceof File&&image.size?uploadAsset(image,`users/${state.userId}/comments/${postId}/${commentId}-${safeStorageName(image)}`):null,state.commentAudio?uploadAsset(new File([state.commentAudio],`${commentId}.webm`,{type:state.commentAudio.type}),`users/${state.userId}/comments/${postId}/${commentId}.webm`):null]);const commentRef=await saveCloudComment(postId,{authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId});const current=discussionComments[postId]||[];if(!current.some(comment=>comment.id===commentRef.id)){discussionComments[postId]=[...current,normalizeDiscussionComment({id:commentRef.id,authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId,createdAt:new Date()})];}syncPostCommentCount(postId,discussionComments[postId].length);state.commentAudio=null;state.replyToCommentId=null;e.target.reset();render();notify('Comment posted');}catch(error){notify(userFacingError(error,'Unable to post this comment.'));}}
   if(e.target.id==='profile-form'){e.preventDefault();const data=new FormData(e.target);const save=e.target.querySelector('button.primary');const photo=data.get('profilePhoto');if(photo instanceof File&&photo.size&&(photo.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(photo.type))){notify('Choose a JPEG, PNG, or WebP image up to 10 MB.');return;}save.disabled=true;save.textContent='Saving…';try{const profile={username:data.get('displayName').trim(),bio:data.get('bio').trim(),course:data.get('course').trim(),yearLevel:data.get('yearLevel').trim(),photoURL:state.profilePhotoURL};if(photo instanceof File&&photo.size)profile.photoURL=await uploadAsset(photo,`users/${state.userId}/profile/${safeStorageName(photo)}`);await updateUserProfile(state.userId,profile);applyProfile(profile);$('.modal-backdrop')?.remove();render();notify('Profile updated');}catch(error){notify(userFacingError(error,'Unable to save your profile.'));save.disabled=false;save.textContent='Save changes';}}
 });
 
 document.addEventListener('input',e=>{if(e.target.id==='people-search'){state.peopleSearch=e.target.value;render();}});
 document.addEventListener('change',async e=>{
+  if(e.target.matches('[data-apk-never]')){if(e.target.checked)persistApkDismissal();return;}
+  if(e.target.name==='channelAssets'){
+    const files=[...(e.target.files||[])];const kinds=files.map(uploadKind);
+    if(files.length>3||files.some((file,index)=>file.size>50*1024*1024||!kinds[index])||new Set(kinds).size!==kinds.length){notify('Use up to one image, one document, and one audio file, each 50 MB or smaller. Videos are not accepted.');e.target.value='';return;}
+    const composer=e.target.closest('.channel-compose');composer?.classList.toggle('has-attachments',files.length>0);e.target.closest('label')?.classList.toggle('has-files',files.length>0);
+    const preview=composer?.querySelector('.channel-attachment-preview');if(preview)preview.innerHTML=files.map(file=>`<span>${icon(uploadKind(file)==='image'?'image':uploadKind(file)==='audio'?'mic':'paperclip')}<b>${escapeHtml(file.name)}</b><small>${Math.max(1,Math.round(file.size/1024))} KB</small></span>`).join('');
+    if(files.length)notify(`${files.length} attachment${files.length===1?'':'s'} ready to send`);
+    return;
+  }
   if(e.target.id!=='file-upload')return;
   e.stopImmediatePropagation();
   const file=e.target.files?.[0]; if(!file)return;
@@ -653,14 +971,14 @@ async function subscribeActiveMessages() {
   stopActiveMessages?.();
   const conversationId=conversationIdFor();
   if(!conversationId)return;
-  try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);const mapped=messages.map(message=>{const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);if(message.type==='postLink')return{id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen};if(message.type==='savedPost'||message.type==='forwardedPost')return{id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen};if(message.type==='attachment')return{id:message.id,type:'attachment',side,time:timeOf(message),file:message.file,seen};return[side,message.text||'',timeOf(message),message.id,seen];});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
+  try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));const mapped=[];messages.forEach((message,index)=>{if(index===firstUnread)mapped.push({type:'unread-divider'});const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen});else if(message.type==='savedPost'||message.type==='forwardedPost')mapped.push({id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen});else if(message.type==='attachment')mapped.push({id:message.id,type:'attachment',side,time:timeOf(message),file:message.file,seen,replyTo:message.replyTo});else mapped.push({id:message.id,type:'text',side,time:timeOf(message),text:message.text||'',seen,replyTo:message.replyTo,edited:Boolean(message.editedAt)});});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
 }
 
 function showApkPrompt() {
-  if(localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
+  if(state.apkPromptDismissed||localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Get the StudyLoop Android app for a faster experience.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><a class="primary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div></div>`);
 }
-async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{discussionComments[state.activePost]=comments.map(comment=>({id:comment.id,parentId:comment.parentId||null,authorId:comment.authorId||'',initials:initials(comment.author),name:comment.author,authorPhotoURL:comment.authorPhotoURL||'',ago:comment.createdAt?.toDate?relativeTime(comment.createdAt):'now',text:comment.text||'',imageURL:comment.imageURL||'',audioURL:comment.audioURL||''}));if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
+async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {
   try {
     stopCloudPosts=await observePosts(cloudPosts => { posts.splice(0,posts.length,...cloudPosts.map(post => ({ ...post, id:String(post.id), ago:post.ago||'just now', comments:post.comments||0 }))); render(); }, error => console.warn('Unable to load posts', error));
@@ -669,12 +987,12 @@ async function connectFirebase() {
       if (!user) {
         resetPrivateState();
         if (!state.isGuest) { state.isAuthenticated=false; state.userId=''; state.userEmail='';state.profileName='';state.profilePhotoURL=''; }
-        render();
+        render();setTimeout(showApkPrompt,500);
         return;
       }
       if(currentAuthUid&&currentAuthUid!==user.uid)resetPrivateState();
       currentAuthUid=user.uid;state.isAuthenticated=true; state.isGuest=false; state.userId=user.uid; state.userEmail=user.email||'';
-      try { const profile=await waitForUserProfile(user.uid);if(!profile){notify('Your account profile could not be loaded. Please sign in again.');await signOutUser();return;}if(profile.deactivated){await signOutUser();notify('This account has been deactivated.');return;}applyProfile(profile); } catch (error) { console.warn('Unable to load profile', error);await signOutUser();return; }
+      try { const profile=await waitForUserProfile(user.uid);if(!profile){notify('Your account profile could not be loaded. Please sign in again.');await signOutUser();return;}if(profile.deactivated){await signOutUser();notify('This account has been deactivated.');return;}applyProfile(profile);if(!state.apkPromptDismissed&&localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'){state.apkPromptDismissed=true;setInstallPromptDismissed(user.uid,true).catch(error=>console.warn('Unable to migrate install prompt preference.',error));} } catch (error) { console.warn('Unable to load profile', error);await signOutUser();return; }
       await loadAccountEntitlement(user.uid);
       if (!stopCloudUsers) stopCloudUsers=await observeUsers(users => { people.splice(0,people.length,...users.filter(profile=>profile.id!==state.userId).map(profile=>({ id:profile.id, initials:initials(profile.username||'Student'), name:profile.username||'Student', info:[profile.course,profile.yearLevel].filter(Boolean).join(' · '), status:profile.bio||'', photoURL:profile.photoURL||'' }))); friendRequests.splice(0);discoverPeople.splice(0,discoverPeople.length,...people);notifications.splice(0);syncChats(); render(); }, error=>console.warn('Unable to load users',error));
       if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();render();},error=>console.warn('Unable to load message notifications',error));
@@ -683,14 +1001,13 @@ async function connectFirebase() {
       if (!stopFriendRequests) stopFriendRequests=await observeFriendRequests(user.uid,relations=>{state.relations=relations;render();},error=>console.warn('Unable to load friend requests',error));
       if (!stopBlocks) stopBlocks=await observeBlocks(user.uid,ids=>{state.blockedUsers=new Set(ids);render();},error=>console.warn('Unable to load blocks',error));
       if (state.page==='landing') state.page='home';
-      render();
+      render();setTimeout(showApkPrompt,500);
     });
   } catch (error) { console.warn('Firebase is unavailable', error); }
 }
 
 render();
 connectFirebase();
-setTimeout(showApkPrompt, 1200);
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 }
