@@ -10,3 +10,6 @@ android/app/build/
 android/keystore.properties
 android/*.jks
 android/*.keystore
+
+.vercel
+.env*

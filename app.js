@@ -17,11 +17,22 @@ const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase
 const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
 const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
 const audioRecorderOptions = () => { const mimeType=preferredAudioMimeType();return {...(mimeType?{mimeType}:{}),audioBitsPerSecond:24000}; };
+function createAudioRecorder(stream) {
+  const options=audioRecorderOptions();
+  try { return new MediaRecorder(stream,options); }
+  catch (preferredCodecError) {
+    if(!options.mimeType)throw preferredCodecError;
+    return new MediaRecorder(stream);
+  }
+}
 const audioExtension = type => ({'audio/mp4':'m4a','audio/ogg':'ogg','audio/mpeg':'mp3','audio/wav':'wav'})[baseMimeType(type)]||'webm';
 function microphoneError(error) {
   if(!window.isSecureContext)return 'Microphone requires a secure HTTPS connection.';
   if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return 'Microphone access is blocked. Enable it for StudyLoop in phone Settings, then try again.';
   if(error?.name==='NotFoundError')return 'No microphone was found on this device.';
+  if(error?.name==='NotReadableError'||error?.name==='AbortError')return 'Your microphone is busy. Close other calls or recording apps, then try again.';
+  if(error?.name==='InvalidStateError')return 'Reopen StudyLoop, then try recording again.';
+  console.warn('Unable to start microphone',error?.name||'unknown',error?.message||'');
   return 'Unable to start the microphone. Check StudyLoop permissions and try again.';
 }
 let activeRecorder;
@@ -523,7 +534,7 @@ async function startChannelVoiceRecording() {
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
   const chunks=[];
-  activeRecorder=new MediaRecorder(stream,audioRecorderOptions());
+  activeRecorder=createAudioRecorder(stream);
   discardActiveRecording=false;
   activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
   activeRecorder.onstop=()=>{
@@ -575,7 +586,7 @@ async function startChatVoiceRecording() {
   const stream=await navigator.mediaDevices.getUserMedia({audio:true});activeRecordingStream=stream;
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
-  const chunks=[];activeRecorder=new MediaRecorder(stream,audioRecorderOptions());discardActiveRecording=false;
+  const chunks=[];activeRecorder=createAudioRecorder(stream);discardActiveRecording=false;
   activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
   activeRecorder.onstop=()=>{clearInterval(recordingTimer);stream.getTracks().forEach(track=>track.stop());activeRecordingStream=null;cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;state.chatRecording=false;state.chatRecordingPaused=false;if(discardActiveRecording){discardActiveRecording=false;clearChatVoice();return;}state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});state.chatAudioDuration=Math.max(1,Math.round(recordingElapsedMs/1000));state.chatAudioURL=URL.createObjectURL(state.chatAudio);const preview=$('#chat-voice-preview');if(preview)preview.src=state.chatAudioURL;const time=$('#chat-preview-time');if(time)time.textContent=formatMediaTime(state.chatAudioDuration);const composer=$('#chat-form');composer?.classList.remove('is-recording');composer?.classList.add('is-preview');};
   activeRecorder.start(250);recordingElapsedMs=0;state.chatRecording=true;state.chatRecordingPaused=false;state.chatRecordingLocked=false;const composer=$('#chat-form');composer?.classList.add('is-recording');composer?.classList.remove('is-preview');
@@ -617,6 +628,14 @@ function abandonCommentVoice() {
   else clearCommentVoice();
 }
 
+function abandonActiveVoiceRecording() {
+  abandonCommentVoice();
+  if(activeRecorder&&['recording','paused'].includes(activeRecorder.state)){
+    discardActiveRecording=true;
+    activeRecorder.stop();
+  }
+}
+
 async function startCommentVoiceRecording() {
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
   if(commentRecorder&&['recording','paused'].includes(commentRecorder.state))return;
@@ -625,7 +644,7 @@ async function startCommentVoiceRecording() {
   commentRecordingStream=stream;
   const chunks=[];
   let recorder;
-  try { recorder=new MediaRecorder(stream,audioRecorderOptions()); }
+  try { recorder=createAudioRecorder(stream); }
   catch(error){stream.getTracks().forEach(track=>track.stop());commentRecordingStream=null;throw error;}
   commentRecorder=recorder;
   discardCommentRecording=false;
@@ -895,7 +914,7 @@ document.addEventListener('click',e=>{
     const status=$('#voice-status'); const preview=$('#voice-preview');
     if(activeRecorder?.state==='recording'){activeRecorder.stop();clearInterval(recordingTimer);action.textContent='Record voice note';return;}
     navigator.mediaDevices.getUserMedia({ audio:true }).then(stream=>{
-      activeRecordingStream=stream; const chunks=[];activeRecorder=new MediaRecorder(stream,audioRecorderOptions());
+      activeRecordingStream=stream; const chunks=[];activeRecorder=createAudioRecorder(stream);
       activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
       activeRecorder.onstop=()=>{state.recordedAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});stream.getTracks().forEach(track=>track.stop());if(preview){preview.src=URL.createObjectURL(state.recordedAudio);preview.hidden=false;}clearInterval(recordingTimer);const seconds=Math.max(1,Math.round((Date.now()-recordingStartedAt)/1000));state.recordedAudioDuration=seconds;if(status)status.textContent='Voice note ready · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');action.textContent='Record again';};
       activeRecorder.start(250); recordingStartedAt=Date.now(); if(status)status.textContent='Recording 0:00 · tap to stop'; recordingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-recordingStartedAt)/1000);if(status)status.textContent='Recording '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · tap to stop';},250); action.textContent='Stop recording';
@@ -1078,8 +1097,10 @@ window.addEventListener('popstate',event=>{
   if(state.page==='post-detail'&&page!=='post-detail')abandonCommentVoice();
   handlingPopState=true;lastHistoryPage=page;state.page=page;state.chatOpen=false;render();handlingPopState=false;
 });
+window.addEventListener('pagehide',abandonActiveVoiceRecording);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)abandonActiveVoiceRecording();});
 function resetPrivateState() {
-  abandonCommentVoice();
+  abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
   currentAuthUid='';inboxMessages=[];state.relations=[];state.blockedUsers=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';chats.splice(0);people.splice(0);notifications.splice(0);
 }
