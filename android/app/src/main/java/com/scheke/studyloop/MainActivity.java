@@ -136,6 +136,14 @@ public class MainActivity extends Activity {
 
         web.loadUrl("https://study-loop-one.vercel.app/");
         setContentView(web);
+        requestMicrophonePermissionIfNeeded();
+    }
+
+    private void requestMicrophonePermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
+            && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION_REQUEST);
+        }
     }
 
     private void grantPendingMicrophone() {

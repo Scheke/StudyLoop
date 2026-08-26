@@ -1,4 +1,4 @@
-#Wed Aug 26 16:06:11 CAT 2026
+#Wed Aug 26 19:17:05 CAT 2026
 base.1=C\:\\Users\\schek\\FULL STACK DEV\\business apps\\School Learning Platform\\android\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\15\\classes.dex
 path.1=15/classes.dex
 base.0=C\:\\Users\\schek\\FULL STACK DEV\\business apps\\School Learning Platform\\android\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\0\\classes.dex
