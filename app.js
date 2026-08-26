@@ -66,6 +66,8 @@ let commentRecordingStream;
 let commentRecordingTimer;
 let commentRecordingStartedAt=0;
 let discardCommentRecording=false;
+let deferredInstallPrompt=null;
+const isInstalledApp=()=>window.matchMedia?.('(display-mode: standalone)').matches||window.navigator.standalone===true;
 let scrollChannelToLatest=false;
 let lastHistoryPage=null;
 let handlingPopState=false;
@@ -130,6 +132,9 @@ const state = {
   replyToMessage: null,
   replyToCommentId: null,
 };
+
+window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();deferredInstallPrompt=event;});
+window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;notify('StudyLoop was added to your home screen.');});
 
 const formatMediaTime = seconds => `${Math.floor(Math.max(0,seconds)/60)}:${String(Math.floor(Math.max(0,seconds))%60).padStart(2,'0')}`;
 const waveformMarkup = (count=34) => `<span class="voice-waveform" aria-hidden="true">${Array.from({length:count},(_,index)=>`<i style="--bar:${18+((index*17)%28)}%"></i>`).join('')}</span>`;
@@ -358,7 +363,7 @@ function settingsPage() {
     'Privacy & security':'Control who can find you and how your account stays secure.',
   }[setting]||'Manage this area of your account.';
   const securityActions=setting==='Privacy & security'?`<button class="secondary" data-action="password-reset">Send password reset email</button><button class="secondary danger-action" data-action="deactivate-account">Deactivate account</button>`:'';
-  const installAction=setting==='Install StudyLoop'?`<div class="install-settings-card"><img src="/studyloop-logo.png" alt="StudyLoop" /><div><strong>StudyLoop for Android</strong><p class="muted">Install the mobile app for a faster experience.</p><a class="primary apk-download" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div>`:'';
+   const installAction=setting==='Install StudyLoop'?`<div class="install-settings-card"><img src="/studyloop-logo.png" alt="StudyLoop" /><div><strong>Install StudyLoop</strong><p class="muted">The installed website has reliable microphone and notification support.</p><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button><button class="secondary" data-action="install-help">How to install manually</button><a class="secondary apk-download" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download Android APK</a></div></div>`:'';
   const shareAction=setting==='Share StudyLoop'?`<div class="app-share-card"><strong>Share StudyLoop</strong><p class="muted">Invite classmates to StudyLoop using the website link.</p><div class="app-link-row"><input id="studyloop-app-link" value="${STUDYLOOP_URL}" readonly aria-label="StudyLoop website link" /><button class="secondary" data-action="copy-app-link">Copy</button></div><a class="whatsapp-share" href="https://wa.me/?text=${encodeURIComponent(`Join me on StudyLoop: ${STUDYLOOP_URL}`)}" target="_blank" rel="noopener noreferrer">${icon('share')} Share to WhatsApp</a></div>`:'';
   return shell(`<div class="stack"><button class="back-link" data-nav="profile">${icon('arrow')} Back to profile</button><section class="card section-card"><h2 style="margin:0">${escapeHtml(setting)}</h2><p class="muted">${escapeHtml(copy)}</p>${installAction}${shareAction}<div class="settings-row">${icon('check')}<span>${setting==='Privacy & security'?'Profile visible to university members':escapeHtml(state.profileName)}</span></div><div class="settings-row">${icon('bell')}<span>${setting==='Privacy & security'?'Login alerts enabled':escapeHtml(state.userEmail||'No email loaded')}</span></div>${securityActions}</section></div>`,setting,false);
 }
@@ -858,6 +863,8 @@ document.addEventListener('click',e=>{
   const action=e.target.closest('[data-action]'); if(!action)return;
   if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)persistApkDismissal();prompt?.remove();return;}
   if(action.dataset.action==='download-apk'){persistApkDismissal();return;}
+  if(action.dataset.action==='install-pwa'){persistApkDismissal();if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt.userChoice.then(choice=>{if(choice.outcome!=='accepted')notify('You can install StudyLoop later from Chrome’s menu.');deferredInstallPrompt=null;}).catch(()=>installHelpModal());}else installHelpModal();return;}
+  if(action.dataset.action==='install-help'){installHelpModal();return;}
   const post=action.closest('[data-post]');
   if(action.dataset.action==='message-menu'){
     const bubble=action.closest('[data-message-id]');const messageId=bubble?.dataset.messageId;const source=inboxMessages.find(message=>String(message.id)===String(messageId));if(!source)return;
@@ -1149,9 +1156,12 @@ async function subscribeActiveMessages() {
   } catch(error) { console.warn('Unable to subscribe to messages',error); }
 }
 
+function installHelpModal() {
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" data-action="close-modal"><div class="modal install-help-modal"><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Use the installed website for the best microphone and notification support.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><ol class="install-steps"><li>Open StudyLoop in Chrome.</li><li>Tap the three dots <b>⋮</b> in the top-right corner.</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li><li>Confirm, then open StudyLoop from your home screen.</li></ol><p class="muted small">If Chrome does not show Install app, use Add to Home screen. The website install supports voice recording without the native APK.</p><div class="modal-actions"><button class="primary" data-action="close-modal">Done</button></div></div></div>`);
+}
 function showApkPrompt() {
-  if(state.apkPromptDismissed||localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Get the StudyLoop Android app for a faster experience.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><a class="primary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK ${icon('download')}</a></div></div></div>`);
+  if(isInstalledApp()||state.apkPromptDismissed||localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Add StudyLoop to your home screen for reliable voice recording.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button><a class="secondary apk-download" data-action="download-apk" href="https://www.mediafire.com/file/cm39bwlcxgs2vd6/StudyLoop.apk/file" target="_blank" rel="noopener">Download APK</a></div></div></div>`);
 }
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {

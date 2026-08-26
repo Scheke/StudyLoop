@@ -327,8 +327,10 @@ button { color: inherit; }
 .apk-never input { width:16px;height:16px;accent-color:var(--tg-blue); }
 .install-settings-card { display:flex;align-items:center;gap:14px;padding:14px;margin:16px 0;border:1px solid var(--line);border-radius:14px;background:var(--tg-blue-pale); }
 .install-settings-card img { width:54px;height:54px;border-radius:14px;object-fit:contain;flex:0 0 auto; }
+.install-settings-card > div { display:grid;gap:8px;min-width:0; }
 .install-settings-card p { margin:4px 0 12px; }
 .install-settings-card .apk-download { padding:9px 13px;font-size:13px; }
+.install-steps { margin:0 0 16px;padding-left:22px;display:grid;gap:10px;color:var(--text); }
 .form-grid { display:grid;gap:15px; }
 .field { display:grid;gap:7px; }
 .field label { font-size:14px;font-weight:600; }
