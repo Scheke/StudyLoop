@@ -5,7 +5,8 @@ service firebase.storage {
     function activeRequester() {
       return request.auth != null
         && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false;
+        && (!('deactivated' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data)
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
     function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }

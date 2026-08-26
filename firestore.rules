@@ -9,10 +9,16 @@ service cloud.firestore {
     function activeUser() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.deactivated == false;
+        && (!('deactivated' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function publicProfile() {
       return get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data;
+    }
+    function profileUsername() {
+      return exists(/databases/$(database)/documents/publicProfiles/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data.username
+        : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username;
     }
     function paidPlan() {
       return (request.auth.token.keys().hasAny(['plan']) && request.auth.token.plan in ['Student+','Power']) || (
@@ -203,10 +209,18 @@ service cloud.firestore {
       allow create: if activeUser() && rateConsumed('comment', 15, duration.value(60, 's'))
         && exists(/databases/$(database)/documents/posts/$(postId))
         && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['authorId','author','authorPhotoURL','text','imageURL','audioURL','parentId','createdAt'])
+        && request.resource.data.keys().hasOnly(['authorId','author','authorPhotoURL','text','imageURL','audioURL','audioDuration','parentId','createdAt'])
         && validText(request.resource.data.author, 80)
-        && request.resource.data.author == publicProfile().username
+        && request.resource.data.author == profileUsername()
         && validText(request.resource.data.text, 2000)
+        && validText(request.resource.data.authorPhotoURL, 2048)
+        && (request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
+        && (request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
+        && (!('audioDuration' in request.resource.data) || (
+          request.resource.data.audioDuration is int
+          && request.resource.data.audioDuration >= 0
+          && request.resource.data.audioDuration <= 600
+        ))
         && request.resource.data.createdAt == request.time
         && (request.resource.data.parentId == null || (
           request.resource.data.parentId is string
@@ -252,7 +266,7 @@ service cloud.firestore {
     match /messages/{messageId} {
       allow create: if activeUser() && rateConsumed('message', 20, duration.value(60, 's'))
         && request.auth.uid == request.resource.data.senderId
-        && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','postId','file','replyTo','seenBy','createdAt'])
+        && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','postId','file','replyTo','seenBy','playedBy','createdAt'])
         && validMessageParticipants(request.resource.data)
         && messagingAllowed(request.resource.data)
         && validText(request.resource.data.conversationId, 160)
@@ -261,6 +275,13 @@ service cloud.firestore {
         && request.resource.data.seenBy is list
         && request.resource.data.seenBy.size() == 1
         && request.resource.data.seenBy[0] == request.auth.uid
+        && (!('playedBy' in request.resource.data) || (
+          request.resource.data.type == 'attachment'
+          && request.resource.data.file.type.matches('^audio/.*')
+          && request.resource.data.playedBy is list
+          && request.resource.data.playedBy.size() == 1
+          && request.resource.data.playedBy[0] == request.auth.uid
+        ))
         && request.resource.data.createdAt == request.time
         && (!('postId' in request.resource.data) || request.resource.data.postId is string)
         && (!('replyTo' in request.resource.data) || (
@@ -301,6 +322,14 @@ service cloud.firestore {
           && request.auth.uid in request.resource.data.seenBy
           && (!('seenBy' in resource.data) || request.resource.data.seenBy.toSet().hasAll(resource.data.seenBy.toSet()))
           && request.resource.data.seenBy.size() <= resource.data.participants.size())
+        || (resource.data.senderId != request.auth.uid
+          && resource.data.type == 'attachment'
+          && resource.data.file.type.matches('^audio/.*')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playedBy','playedAt'])
+          && request.resource.data.playedAt == request.time
+          && request.auth.uid in request.resource.data.playedBy
+          && (!('playedBy' in resource.data) || request.resource.data.playedBy.toSet().hasAll(resource.data.playedBy.toSet()))
+          && request.resource.data.playedBy.size() <= resource.data.participants.size())
       );
     }
 

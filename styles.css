@@ -274,6 +274,7 @@ button { color: inherit; }
 .stat strong { font-size:22px;color:var(--tg-blue-dark); }
 .stat span { color:var(--muted);font-size:13px;margin-top:3px; }
 .settings-row { width:100%;display:flex;align-items:center;gap:12px;padding:14px 0;border:0;border-bottom:1px solid var(--line);background:transparent;text-align:left;cursor:pointer; }
+.notification-actions { display:flex;align-items:center;gap:8px; }
 .settings-row:last-child { border:0; }
 .settings-row .icon { color:var(--tg-blue); }
 .settings-row .i-right { margin-left:auto;color:var(--muted); }
@@ -695,6 +696,15 @@ button { color: inherit; }
 .discussion-message.comment-reply .discussion-bubble { background:#f8fcfe; }
 .telegram-comment-compose { flex:0 0 auto;margin:0;padding:8px 10px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:#fff; }
 .telegram-comment-compose input { background:#f8fbfd; }
+.comment-compose-idle,.comment-compose-recording,.comment-compose-preview { width:100%;align-items:center;gap:8px; }
+.comment-compose-idle { display:flex; }
+.comment-compose-recording,.comment-compose-preview { display:none;min-height:50px; }
+.telegram-comment-compose.is-recording .comment-compose-idle,.telegram-comment-compose.is-preview .comment-compose-idle { display:none; }
+.telegram-comment-compose.is-recording .comment-compose-recording,.telegram-comment-compose.is-preview .comment-compose-preview { display:flex; }
+.comment-compose-idle > input { flex:1;min-width:0; }
+.comment-compose-recording .voice-waveform { flex:1;min-width:56px; }
+.comment-compose-preview audio { flex:1;min-width:0;height:40px; }
+.comment-compose-preview > span { color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums; }
 .discussion-reply-notice { flex:0 0 auto; }
 .voice-comment-discard { width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:50%;color:var(--red);background:#fff0f0;cursor:pointer; }
 .voice-comment-discard .icon { width:17px;height:17px; }
@@ -802,8 +812,17 @@ button { color: inherit; }
 .compose-reply small { color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .compose-reply button { width:30px;height:30px;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer; }
 
-.voice-note-player { --voice-progress:0%;min-width:230px;max-width:100%;display:flex;align-items:center;gap:10px;padding:8px 4px 5px; }
+.voice-note-player { --voice-progress:0%;min-width:260px;max-width:100%;display:flex;align-items:center;gap:8px;padding:8px 4px 5px; }
 .voice-note-player audio { display:none; }
+.voice-sender-avatar { position:relative;width:34px;height:34px;flex:0 0 auto;display:block; }
+.voice-sender-avatar .avatar { width:34px;height:34px;font-size:11px;border-width:1px; }
+.voice-sender-avatar > i { position:absolute;right:-3px;bottom:-3px;width:16px;height:16px;display:grid;place-items:center;border:2px solid #fff;border-radius:50%;color:#6f8fa3;background:var(--tg-blue-soft); }
+.voice-sender-avatar > i .icon { width:9px;height:9px; }
+.voice-note-player.is-listened .voice-sender-avatar > i { color:#fff;background:var(--tg-blue); }
+.voice-mic-status { width:28px;height:28px;flex:0 0 auto;display:grid;place-items:center;border-radius:50%;color:#6f8fa3;background:var(--tg-blue-soft); }
+.voice-mic-status .icon { width:15px;height:15px; }
+.voice-note-player.is-listened .voice-mic-status,.voice-note-player.is-listened .voice-sender-avatar + .voice-play { color:var(--tg-blue); }
+.voice-speed { min-width:34px;height:27px;flex:0 0 auto;border:0;border-radius:14px;padding:0 7px;background:#dcecf5;color:var(--tg-blue-dark);font-size:11px;font-weight:800;cursor:pointer; }
 .voice-play { width:42px;height:42px;flex:0 0 auto;display:grid;place-items:center;border:0;border-radius:50%;color:#fff;background:var(--tg-blue);cursor:pointer; }
 .voice-track { min-width:0;flex:1;display:grid;grid-template-columns:1fr auto;align-items:end;gap:8px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums; }
 .voice-note-player .voice-waveform { position:relative;height:27px; }
@@ -874,5 +893,7 @@ button { color: inherit; }
   .discussion-bubble { width:min(86%,520px); }
   .telegram-comment-compose { gap:4px; }
   .telegram-comment-compose .action { padding:7px 5px; }
-  .telegram-comment-compose audio { position:absolute;left:10px;right:10px;bottom:60px;width:calc(100% - 20px); }
+  .telegram-comment-compose audio { position:static;width:auto; }
+  .comment-compose-recording { gap:6px; }
+  .comment-compose-recording .voice-waveform i:nth-child(n+19) { display:none; }
 }

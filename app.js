@@ -1,5 +1,5 @@
 import './styles.css';
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -16,6 +16,14 @@ const UPLOAD_ACCEPT = [...ALLOWED_UPLOAD_TYPES].join(',');
 const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase();
 const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
 const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
+const audioRecorderOptions = () => { const mimeType=preferredAudioMimeType();return {...(mimeType?{mimeType}:{}),audioBitsPerSecond:24000}; };
+const audioExtension = type => ({'audio/mp4':'m4a','audio/ogg':'ogg','audio/mpeg':'mp3','audio/wav':'wav'})[baseMimeType(type)]||'webm';
+function microphoneError(error) {
+  if(!window.isSecureContext)return 'Microphone requires a secure HTTPS connection.';
+  if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return 'Microphone access is blocked. Enable it for StudyLoop in phone Settings, then try again.';
+  if(error?.name==='NotFoundError')return 'No microphone was found on this device.';
+  return 'Unable to start the microphone. Check StudyLoop permissions and try again.';
+}
 let activeRecorder;
 let activeRecordingStream;
 let recordingTimer;
@@ -25,7 +33,14 @@ let discardActiveRecording=false;
 let recordingAudioContext;
 let recordingAnalyser;
 let recordingAnimationFrame;
+let commentRecorder;
+let commentRecordingStream;
+let commentRecordingTimer;
+let commentRecordingStartedAt=0;
+let discardCommentRecording=false;
 let scrollChannelToLatest=false;
+let lastHistoryPage=null;
+let handlingPopState=false;
 
 const state = {
   page: 'landing',
@@ -75,6 +90,9 @@ const state = {
   channelRecordingPaused: false,
   channelRecordingLocked: false,
   commentAudio: null,
+  commentAudioURL: '',
+  commentAudioDuration: 0,
+  commentRecording: false,
   chatAudio: null,
   chatAudioURL: '',
   chatAudioDuration: 0,
@@ -88,10 +106,15 @@ const state = {
 const formatMediaTime = seconds => `${Math.floor(Math.max(0,seconds)/60)}:${String(Math.floor(Math.max(0,seconds))%60).padStart(2,'0')}`;
 const waveformMarkup = (count=34) => `<span class="voice-waveform" aria-hidden="true">${Array.from({length:count},(_,index)=>`<i style="--bar:${18+((index*17)%28)}%"></i>`).join('')}</span>`;
 
-function voiceNotePlayer(url,duration=0,label='Voice note') {
+function voiceNotePlayer(url,duration=0,label='Voice note',options={}) {
   const safeUrl=safeAssetUrl(url);
   if(!safeUrl)return '';
-  return `<div class="voice-note-player" data-voice-player><button type="button" class="voice-play" data-action="toggle-voice-note" aria-label="Play ${escapeHtml(label)}"><span class="voice-play-glyph"></span></button><div class="voice-track">${waveformMarkup()}<span class="voice-note-time" data-voice-time>${formatMediaTime(duration)}</span></div><audio preload="metadata" src="${safeUrl}"></audio></div>`;
+  const person=options.person||null;
+  return `<div class="voice-note-player ${options.listened?'is-listened':''}" data-voice-player ${options.messageId?`data-message-id="${escapeHtml(options.messageId)}"`:''} ${options.mine?'data-mine="true"':''}>${person?`<span class="voice-sender-avatar">${avatar(person)}<i>${icon('mic')}</i></span>`:`<span class="voice-mic-status">${icon('mic')}</span>`}<button type="button" class="voice-play" data-action="toggle-voice-note" aria-label="Play ${escapeHtml(label)}"><span class="voice-play-glyph"></span></button><div class="voice-track">${waveformMarkup()}<span class="voice-note-time" data-voice-time>${formatMediaTime(duration)}</span></div><button type="button" class="voice-speed" data-action="voice-speed" aria-label="Playback speed">1x</button><audio preload="metadata" src="${safeUrl}"></audio></div>`;
+}
+
+function hydrateVoicePlayers() {
+  $$('[data-voice-player]').forEach(player=>{const audio=player.querySelector('audio');const time=player.querySelector('[data-voice-time]');if(!audio||!time)return;const updateDuration=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0&&!audio.currentTime)time.textContent=formatMediaTime(audio.duration);};if(audio.readyState>=1)updateDuration();else audio.addEventListener('loadedmetadata',updateDuration,{once:true});});
 }
 
 const channels = [];
@@ -121,7 +144,8 @@ function normalizeDiscussionComment(comment) {
     ago:comment.createdAt?.toDate?relativeTime(comment.createdAt):relativeTime(comment.createdAt||new Date()),
     text:comment.text||'',
     imageURL:comment.imageURL||'',
-    audioURL:comment.audioURL||''
+    audioURL:comment.audioURL||'',
+    audioDuration:Number(comment.audioDuration)||0
   };
 }
 
@@ -297,7 +321,7 @@ async function deletePostAndAttachments(item) {
   await deleteCloudPost(item.id);
   await Promise.all([item.imageURL,item.audioURL,item.file?.url].filter(Boolean).map(url=>deleteUploadedAsset(url).catch(error=>console.warn('Unable to remove an attachment after deleting its post.',error))));
 }
-function canViewPost(post) { const index=channels.findIndex(channel=>channel.id===post.channelId||channel.name===post.course);const channel=channels[index];return !channel||channel.access==='Public'||(!state.isGuest&&state.joined.has(index)); }
+function canViewPost(post) { const index=channels.findIndex(channel=>channel.id===post.channelId||channel.name===post.course);const channel=channels[index];return Boolean(channel&&state.joined.has(index)); }
 
 function settingsPage() {
   const setting=state.activeSetting;
@@ -317,11 +341,12 @@ function homePage() {
   const chips=['All',...channels.map(channel=>channel.name)];
   const friends=people.filter(person=>isAcceptedFriend(person.id));
   const feedContent=!channels.length?`<div class="card empty channel-empty-state"><div class="channel-icon">${icon('plus')}</div><h2>No channel created yet</h2><p class="muted">Create a channel to start sharing notes, questions, and study resources.</p><button class="primary" data-action="create-channel">Create a channel</button></div>`:filtered.length?filtered.map(postCard).join(''):`<div class="card empty"><div class="channel-icon">${icon('grid')}</div><h2>No posts yet</h2><p class="muted">Join a channel or create one to see study posts here.</p><button class="primary" data-nav="channels">Browse channels</button></div>`;
+  const joinedChannels=channels.filter((channel,index)=>state.joined.has(index));
   return shell(`<div class="page-grid"><div class="stack">
     <div class="chips">${chips.map(c=>`<button class="chip ${state.feedFilter===c?'active':''}" data-filter="${c}">${c}</button>`).join('')}</div>
     <div class="stack">${feedContent}</div>
   </div><aside class="stack right-rail">
-    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${channels.slice(0,3).map(raw=>`<div class="mini-channel"><div class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</div><div class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.access||'Public')} channel</span></div>${icon('chevron')}</div>`).join('')}</section>
+    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${joinedChannels.slice(0,3).map(raw=>`<div class="mini-channel"><div class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</div><div class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.access||'Public')} channel</span></div>${icon('chevron')}</div>`).join('')||'<p class="muted">Join a channel to see its feed here.</p>'}</section>
     <section class="card section-card"><div class="section-title"><h3>Study circle</h3><span class="muted small">${friends.length} friends</span></div>${friends.length?friends.slice(0,3).map((p,i)=>`<div class="mini-channel" data-profile="${people.indexOf(p)}">${avatar(p,['','green','purple'][i])}<div class="channel-body"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.status)}</span></div><button class="action" data-person-chat="${people.indexOf(p)}">${icon('chat')}</button></div>`).join(''):'<p class="muted">Accepted friends will appear here.</p>'}</section>
   </aside></div>`,'Home');
 }
@@ -343,7 +368,8 @@ function messageBubble(message) {
   }
   if (!Array.isArray(message) && message.type==='attachment') {
     const file=message.file||{}; const fileUrl=safeAssetUrl(file.url);
-    return `<div class="bubble ${message.side} forwarded-bubble" data-message-id="${escapeHtml(message.id)}"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?voiceNotePlayer(file.url,file.duration||0,'voice message'):fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
+    const sender=message.side==='mine'?{name:state.profileName,photoURL:state.profilePhotoURL,initials:initials(state.profileName)}:people.find(person=>person.id===message.senderId);
+    return `<div class="bubble ${message.side} forwarded-bubble" data-message-id="${escapeHtml(message.id)}"><div class="forwarded-label">${icon('paperclip')} ${file.type?.startsWith('audio/')?'Voice note':'Shared file'}</div>${fileUrl&&file.type?.startsWith('audio/')?voiceNotePlayer(file.url,file.duration||0,'voice message',{messageId:message.id,mine:message.side==='mine',listened:message.listened,person:sender}):fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${escapeHtml(file.name||'download')}"><span class="file-icon">${file.type==='application/pdf'?'PDF':'FILE'}</span><span><b>${escapeHtml(file.name||'Attachment')}</b><small>${escapeHtml(file.meta||'')}</small></span>${icon('download')}</a>`:''}<div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='forwarded-post') {
     let post=message.post||{};
@@ -497,8 +523,7 @@ async function startChannelVoiceRecording() {
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
   const chunks=[];
-  const mimeType=preferredAudioMimeType();
-  activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);
+  activeRecorder=new MediaRecorder(stream,audioRecorderOptions());
   discardActiveRecording=false;
   activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
   activeRecorder.onstop=()=>{
@@ -550,12 +575,84 @@ async function startChatVoiceRecording() {
   const stream=await navigator.mediaDevices.getUserMedia({audio:true});activeRecordingStream=stream;
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(AudioContextClass){recordingAudioContext=new AudioContextClass();const source=recordingAudioContext.createMediaStreamSource(stream);recordingAnalyser=recordingAudioContext.createAnalyser();recordingAnalyser.fftSize=128;recordingAnalyser.smoothingTimeConstant=.72;source.connect(recordingAnalyser);}
-  const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);discardActiveRecording=false;
+  const chunks=[];activeRecorder=new MediaRecorder(stream,audioRecorderOptions());discardActiveRecording=false;
   activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
   activeRecorder.onstop=()=>{clearInterval(recordingTimer);stream.getTracks().forEach(track=>track.stop());activeRecordingStream=null;cancelAnimationFrame(recordingAnimationFrame);recordingAnimationFrame=0;recordingAudioContext?.close?.().catch(()=>{});recordingAudioContext=null;recordingAnalyser=null;state.chatRecording=false;state.chatRecordingPaused=false;if(discardActiveRecording){discardActiveRecording=false;clearChatVoice();return;}state.chatAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});state.chatAudioDuration=Math.max(1,Math.round(recordingElapsedMs/1000));state.chatAudioURL=URL.createObjectURL(state.chatAudio);const preview=$('#chat-voice-preview');if(preview)preview.src=state.chatAudioURL;const time=$('#chat-preview-time');if(time)time.textContent=formatMediaTime(state.chatAudioDuration);const composer=$('#chat-form');composer?.classList.remove('is-recording');composer?.classList.add('is-preview');};
   activeRecorder.start(250);recordingElapsedMs=0;state.chatRecording=true;state.chatRecordingPaused=false;state.chatRecordingLocked=false;const composer=$('#chat-form');composer?.classList.add('is-recording');composer?.classList.remove('is-preview');
   const animateWaveform=()=>{if(!recordingAnalyser||!state.chatRecording)return;const data=new Uint8Array(recordingAnalyser.frequencyBinCount);recordingAnalyser.getByteFrequencyData(data);const bars=$$('#chat-form .channel-compose-recording .voice-waveform i');bars.forEach((bar,index)=>{const value=data[index%data.length]||0;bar.style.height=`${Math.max(12,Math.min(100,12+value/255*88))}%`;});recordingAnimationFrame=requestAnimationFrame(animateWaveform);};animateWaveform();
   recordingTimer=setInterval(()=>{if(activeRecorder?.state==='recording')recordingElapsedMs+=100;const time=$('#chat-record-time');if(time)time.textContent=formatMediaTime(recordingElapsedMs/1000);},100);
+}
+
+function setCommentComposerMode(mode) {
+  const composer=$('#comment-form');
+  if(!composer)return;
+  composer.classList.toggle('is-recording',mode==='recording');
+  composer.classList.toggle('is-preview',mode==='preview');
+}
+
+function hydrateCommentRecorder() {
+  const preview=$('#comment-voice-preview');
+  if(preview&&state.commentAudioURL&&preview.src!==state.commentAudioURL)preview.src=state.commentAudioURL;
+  const time=$('#comment-preview-time');
+  if(time)time.textContent=formatMediaTime(state.commentAudioDuration);
+  setCommentComposerMode(state.commentRecording?'recording':state.commentAudio?'preview':'idle');
+}
+
+function clearCommentVoice() {
+  clearInterval(commentRecordingTimer);
+  commentRecordingTimer=undefined;
+  commentRecordingStream?.getTracks?.().forEach(track=>track.stop());
+  commentRecordingStream=null;
+  if(state.commentAudioURL)URL.revokeObjectURL(state.commentAudioURL);
+  state.commentAudio=null;
+  state.commentAudioURL='';
+  state.commentAudioDuration=0;
+  state.commentRecording=false;
+  commentRecorder=undefined;
+  setCommentComposerMode('idle');
+}
+
+function abandonCommentVoice() {
+  if(commentRecorder&&['recording','paused'].includes(commentRecorder.state)){discardCommentRecording=true;commentRecorder.stop();}
+  else clearCommentVoice();
+}
+
+async function startCommentVoiceRecording() {
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  if(commentRecorder&&['recording','paused'].includes(commentRecorder.state))return;
+  clearCommentVoice();
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  commentRecordingStream=stream;
+  const chunks=[];
+  let recorder;
+  try { recorder=new MediaRecorder(stream,audioRecorderOptions()); }
+  catch(error){stream.getTracks().forEach(track=>track.stop());commentRecordingStream=null;throw error;}
+  commentRecorder=recorder;
+  discardCommentRecording=false;
+  recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+  recorder.onerror=event=>{stream.getTracks().forEach(track=>track.stop());commentRecordingStream=null;state.commentRecording=false;notify(microphoneError(event.error));setCommentComposerMode('idle');};
+  recorder.onstop=()=>{
+    clearInterval(commentRecordingTimer);
+    commentRecordingTimer=undefined;
+    stream.getTracks().forEach(track=>track.stop());
+    if(commentRecordingStream===stream)commentRecordingStream=null;
+    state.commentRecording=false;
+    if(discardCommentRecording){discardCommentRecording=false;clearCommentVoice();notify('Voice comment discarded');return;}
+    if(!chunks.length){clearCommentVoice();notify('No audio was captured. Try recording again.');return;}
+    state.commentAudio=new Blob(chunks,{type:recorder.mimeType||'audio/webm'});
+    state.commentAudioDuration=Math.max(1,Math.round((Date.now()-commentRecordingStartedAt)/1000));
+    state.commentAudioURL=URL.createObjectURL(state.commentAudio);
+    hydrateCommentRecorder();
+    notify('Listen to your voice comment, then send or discard it.');
+  };
+  try { recorder.start(250); }
+  catch(error){stream.getTracks().forEach(track=>track.stop());commentRecordingStream=null;commentRecorder=undefined;throw error;}
+  commentRecordingStartedAt=Date.now();
+  state.commentRecording=true;
+  setCommentComposerMode('recording');
+  const time=$('#comment-record-time');
+  if(time)time.textContent='0:00';
+  commentRecordingTimer=setInterval(()=>{const target=$('#comment-record-time');if(target)target.textContent=formatMediaTime((Date.now()-commentRecordingStartedAt)/1000);},200);
 }
 
 function channelDetailPage() {
@@ -593,16 +690,17 @@ function postDetailPage() {
   if(!post)return shell(`<div class="telegram-empty"><h3>Post unavailable</h3><p>This post may have been removed.</p></div>`,'Replies',false);
   const comments=discussionComments[post.id]||[];
   const ids=new Set(comments.map(comment=>comment.id));
-  const renderComment=(c,isReply=false)=>{const authorIndex=people.findIndex(person=>person.id===c.authorId);return `<article class="discussion-message ${isReply?'comment-reply':''}">${avatar({name:c.name,photoURL:c.authorPhotoURL,initials:c.initials})}<div class="discussion-bubble"><div class="comment-heading">${authorIndex>=0?`<button data-profile="${authorIndex}">${escapeHtml(c.name)}</button>`:`<strong>${escapeHtml(c.name)}</strong>`}${c.authorId===state.userId?`<button class="comment-more" data-delete-comment="${escapeHtml(c.id)}" aria-label="Delete comment">${icon('more')}</button>`:''}</div>${c.text?`<p>${escapeHtml(c.text)}</p>`:''}${safeAssetUrl(c.imageURL)?`<img class="comment-image" src="${safeAssetUrl(c.imageURL)}" alt="Comment attachment" data-action="zoom-image" />`:''}${safeAssetUrl(c.audioURL)?voiceNotePlayer(c.audioURL,0,'voice comment'):''}<div class="discussion-message-footer">${!isReply&&c.id?`<button data-action="reply-comment" data-reply-comment="${escapeHtml(c.id)}">Reply</button>`:''}<span>${escapeHtml(c.ago||relativeTime(c.createdAt))}</span></div></div></article>`;};
+  const renderComment=(c,isReply=false)=>{const authorIndex=people.findIndex(person=>person.id===c.authorId);return `<article class="discussion-message ${isReply?'comment-reply':''}">${avatar({name:c.name,photoURL:c.authorPhotoURL,initials:c.initials})}<div class="discussion-bubble"><div class="comment-heading">${authorIndex>=0?`<button data-profile="${authorIndex}">${escapeHtml(c.name)}</button>`:`<strong>${escapeHtml(c.name)}</strong>`}${c.authorId===state.userId?`<button class="comment-more" data-delete-comment="${escapeHtml(c.id)}" aria-label="Delete comment">${icon('more')}</button>`:''}</div>${c.text?`<p>${escapeHtml(c.text)}</p>`:''}${safeAssetUrl(c.imageURL)?`<img class="comment-image" src="${safeAssetUrl(c.imageURL)}" alt="Comment attachment" data-action="zoom-image" />`:''}${safeAssetUrl(c.audioURL)?voiceNotePlayer(c.audioURL,c.audioDuration,'voice comment'):''}<div class="discussion-message-footer">${!isReply&&c.id?`<button data-action="reply-comment" data-reply-comment="${escapeHtml(c.id)}">Reply</button>`:''}<span>${escapeHtml(c.ago||relativeTime(c.createdAt))}</span></div></div></article>`;};
   const roots=comments.filter(comment=>!comment.parentId||!ids.has(comment.parentId));
   const commentHtml=roots.map(root=>`<section class="discussion-thread">${renderComment(root)}${comments.filter(reply=>reply.parentId===root.id).map(reply=>renderComment(reply,true)).join('')}</section>`).join('');
   const replyNotice=state.replyToCommentId?`<div class="compose-reply discussion-reply-notice"><span><b>Replying to a comment</b><small>Replies are limited to one level.</small></span><button type="button" data-action="cancel-reply">${icon('x')}</button></div>`:'';
-  return shell(`<div class="discussion-view"><header class="discussion-head"><button class="icon-btn" data-nav="home" aria-label="Back to feed">${icon('arrow')}</button><span><strong>Replies</strong><small>${comments.length} comment${comments.length===1?'':'s'}</small></span><button class="icon-btn" data-action="share" data-post="${escapeHtml(post.id)}" aria-label="Share post">${icon('share')}</button></header><div class="discussion-scroll"><div class="discussion-original">${postCard(post)}</div><div class="discussion-divider"><span>${comments.length?'Replies':'No replies yet'}</span></div><div class="discussion-list">${commentHtml||`<div class="telegram-empty compact-empty"><p>Be the first to reply.</p></div>`}</div></div>${replyNotice}<form id="comment-form" class="comment-compose telegram-comment-compose"><label class="action comment-upload">${icon('paperclip')}<input type="file" name="commentImage" accept="image/jpeg,image/png,image/webp" hidden /></label><input name="comment" autocomplete="off" maxlength="2000" placeholder="${state.replyToCommentId?'Write a reply…':'Write a comment…'}" /><button type="button" class="action" data-action="record-comment-voice" aria-label="Record voice comment">${icon('mic')}</button><audio id="comment-voice-preview" controls hidden></audio><button type="button" class="voice-comment-discard" data-action="discard-comment-voice" hidden>${icon('x')}</button><button class="send-btn" aria-label="Post comment">${icon('send')}</button></form></div>`,'Replies',false);
+  return shell(`<div class="discussion-view"><header class="discussion-head"><button class="icon-btn" data-nav="home" aria-label="Back to feed">${icon('arrow')}</button><span><strong>Replies</strong><small>${comments.length} comment${comments.length===1?'':'s'}</small></span><button class="icon-btn" data-action="share" data-post="${escapeHtml(post.id)}" aria-label="Share post">${icon('share')}</button></header><div class="discussion-scroll"><div class="discussion-original">${postCard(post)}</div><div class="discussion-divider"><span>${comments.length?'Replies':'No replies yet'}</span></div><div class="discussion-list">${commentHtml||`<div class="telegram-empty compact-empty"><p>Be the first to reply.</p></div>`}</div></div>${replyNotice}<form id="comment-form" class="comment-compose telegram-comment-compose ${state.commentRecording?'is-recording':state.commentAudio?'is-preview':''}"><div class="comment-compose-idle"><label class="action comment-upload">${icon('paperclip')}<input type="file" name="commentImage" accept="image/jpeg,image/png,image/webp" hidden /></label><input name="comment" autocomplete="off" maxlength="2000" placeholder="${state.replyToCommentId?'Write a reply…':'Write a comment…'}" /><button type="button" class="action" data-action="record-comment-voice" aria-label="Record voice comment">${icon('mic')}</button><button class="send-btn" aria-label="Post comment">${icon('send')}</button></div><div class="comment-compose-recording"><i class="recording-dot"></i><strong id="comment-record-time">0:00</strong>${waveformMarkup(24)}<button type="button" class="recording-cancel" data-action="discard-comment-voice">Cancel</button><button type="button" class="recording-finish" data-action="finish-comment-voice" aria-label="Stop recording">${icon('send')}</button></div><div class="comment-compose-preview"><audio id="comment-voice-preview" controls preload="metadata"></audio><span id="comment-preview-time">${formatMediaTime(state.commentAudioDuration)}</span><button type="button" class="voice-comment-discard" data-action="discard-comment-voice" aria-label="Discard voice comment">${icon('trash')}</button><button class="send-btn" aria-label="Post voice comment">${icon('send')}</button></div></form></div>`,'Replies',false);
 }
 
 function notificationsPage() {
   const content=notifications.length?notifications.map(n=>`<article class="card notification-item ${state.readNotifications.has(n.id)?'read':''}"><div class="notification-icon">${icon(n.icon)}</div><div><strong>${n.title}</strong><p>${n.body}</p><span>${n.createdAt?escapeHtml(relativeTime(n.createdAt)):escapeHtml(n.time||'')}</span></div>${!state.readNotifications.has(n.id)?'<i></i>':''}</article>`).join(''):`<div class="card empty"><div class="notification-icon">${icon('bell')}</div><h3>No notifications</h3><p class="muted">You’re all caught up. New activity will appear here.</p></div>`;
-  return shell(`<div class="stack"><div class="section-title"><div><h2 style="margin:0">Notifications</h2><p class="muted" style="margin:4px 0 0">Stay up to date with your learning circle.</p></div>${notifications.length?'<button class="secondary" data-action="mark-notifications-read">Mark all read</button>':''}</div>${content}</div>`,'Notifications',false);
+  const permissionButton=typeof Notification!=='undefined'&&Notification.permission!=='granted'?'<button class="secondary" data-action="request-notifications">Enable notifications</button>':'';
+  return shell(`<div class="stack"><div class="section-title"><div><h2 style="margin:0">Notifications</h2><p class="muted" style="margin:4px 0 0">Stay up to date with your learning circle.</p></div><span class="notification-actions">${permissionButton}${notifications.length?'<button class="secondary" data-action="mark-notifications-read">Mark all read</button>':''}</span></div>${content}</div>`,'Notifications',false);
 }
 
 function postComposerModal() {
@@ -649,8 +747,13 @@ function pricingPage() {
 }
 
 function render() {
+  if(state.commentRecording&&state.page==='post-detail'&&$('#comment-form'))return;
+  if(lastHistoryPage===null){try{history.replaceState({studyloopPage:state.page},'',location.href);}catch{};lastHistoryPage=state.page;}
+  else if(!handlingPopState&&lastHistoryPage!==state.page){try{history.pushState({studyloopPage:state.page},'',location.href);}catch{};lastHistoryPage=state.page;}
   const pages={landing:landingPage,home:homePage,channels:channelsPage,messages:messagesPage,friends:friendsPage,saved:savedPage,pricing:pricingPage,profile:profilePage,settings:settingsPage,terms:()=>legalPage('terms'),privacy:()=>legalPage('privacy'),'user-profile':userProfilePage,'channel-detail':channelDetailPage,'post-detail':postDetailPage,notifications:notificationsPage};
   $('#app').innerHTML=(pages[state.page]||homePage)();
+  hydrateVoicePlayers();
+  if(state.page==='post-detail')hydrateCommentRecorder();
   if(state.page==='messages') requestAnimationFrame(()=>{const c=$('#chat-messages');if(c)c.scrollTop=c.scrollHeight;});
   if(state.page==='channel-detail'&&scrollChannelToLatest)requestAnimationFrame(()=>{const c=$('.channel-messages');if(c)c.scrollTop=c.scrollHeight;scrollChannelToLatest=false;});
 }
@@ -668,6 +771,7 @@ document.addEventListener('click',e=>{
   const nav=e.target.closest('[data-nav]'); if(nav){
     const protectedPages=new Set(['messages','friends','saved','profile']);
     if(state.isGuest&&protectedPages.has(nav.dataset.nav)){openAuthModal('Sign in to access your personal StudyLoop space.');return;}
+    if(state.page==='post-detail'&&nav.dataset.nav!=='post-detail')abandonCommentVoice();
     state.page=nav.dataset.nav;state.chatOpen=false;if(state.page==='messages'&&state.activeChat===0&&chats.length>1)state.activeChat=1;render();return;
   }
   const shareTarget=e.target.closest('[data-share-target]'); if(shareTarget){
@@ -697,7 +801,7 @@ document.addEventListener('click',e=>{
   const openPost=e.target.closest('[data-open-post]'); if(openPost){const index=posts.findIndex(item=>String(item.id)===String(openPost.dataset.openPost));if(index<0){notify('This post is no longer available.');return;}state.activePost=posts[index].id;state.page='post-detail';render();return;}
   const forwardMessage=e.target.closest('[data-forward-message]'); if(forwardMessage){document.body.insertAdjacentHTML('beforeend',attachmentForwardModal(forwardMessage.dataset.forwardMessage));return;}
   const forwardPerson=e.target.closest('[data-forward-person]');
-  if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
+  if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file,...(source.file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
   const forwardChannel=e.target.closest('[data-forward-channel]');
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
   const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
@@ -754,7 +858,7 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='channel-post'){state.recordedAudio=null;document.body.insertAdjacentHTML('beforeend',postComposerModal());return;}
   if(action.dataset.action==='record-channel-voice'){
     if(guestNeedsSignIn('Sign in to record a voice note.'))return;
-    startChannelVoiceRecording().catch(error=>notify(error?.code==='media/unsupported'?'Voice recording is not supported in this browser.':'Microphone permission is needed to record a voice note.'));
+    startChannelVoiceRecording().catch(error=>notify(error?.code==='media/unsupported'?'Voice recording is not supported in this browser.':microphoneError(error)));
     return;
   }
   if(action.dataset.action==='pause-channel-voice'){
@@ -780,21 +884,22 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='toggle-voice-note'){
     const player=action.closest('[data-voice-player]');const audio=player?.querySelector('audio');if(!audio)return;
     $$('[data-voice-player] audio').filter(item=>item!==audio).forEach(item=>{item.pause();const other=item.closest('[data-voice-player]');other?.querySelector('.voice-play')?.classList.remove('is-playing');other?.classList.remove('is-playing');});
-    if(audio.paused){audio.play();action.classList.add('is-playing');player.classList.add('is-playing');}else{audio.pause();action.classList.remove('is-playing');player.classList.remove('is-playing');}
+    if(audio.paused){audio.play();action.classList.add('is-playing');player.classList.add('is-playing');if(player.dataset.messageId&&player.dataset.mine!=='true'&&!player.dataset.played){player.dataset.played='true';player.classList.add('is-listened');markMessagePlayed(player.dataset.messageId,state.userId).catch(error=>console.warn('Unable to save voice-note playback state.',error));}}else{audio.pause();action.classList.remove('is-playing');player.classList.remove('is-playing');}
     const sync=()=>{const duration=Number.isFinite(audio.duration)?audio.duration:0;const progress=duration?audio.currentTime/duration:0;player.style.setProperty('--voice-progress',`${progress*100}%`);const time=player.querySelector('[data-voice-time]');if(time)time.textContent=formatMediaTime(audio.currentTime||duration);};
     audio.onloadedmetadata=sync;audio.ontimeupdate=sync;audio.onended=()=>{action.classList.remove('is-playing');player.classList.remove('is-playing');player.style.setProperty('--voice-progress','0%');const time=player.querySelector('[data-voice-time]');if(time)time.textContent=formatMediaTime(Number.isFinite(audio.duration)?audio.duration:0);};
     return;
   }
+  if(action.dataset.action==='voice-speed'){const player=action.closest('[data-voice-player]');const audio=player?.querySelector('audio');if(!audio)return;const speeds=[1,1.5,2];const next=speeds[(speeds.indexOf(audio.playbackRate)+1)%speeds.length];audio.playbackRate=next;action.textContent=`${next}x`;return;}
   if(action.dataset.action==='record-voice'){
     if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
     const status=$('#voice-status'); const preview=$('#voice-preview');
     if(activeRecorder?.state==='recording'){activeRecorder.stop();clearInterval(recordingTimer);action.textContent='Record voice note';return;}
     navigator.mediaDevices.getUserMedia({ audio:true }).then(stream=>{
-      activeRecordingStream=stream; const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);
+      activeRecordingStream=stream; const chunks=[];activeRecorder=new MediaRecorder(stream,audioRecorderOptions());
       activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
       activeRecorder.onstop=()=>{state.recordedAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});stream.getTracks().forEach(track=>track.stop());if(preview){preview.src=URL.createObjectURL(state.recordedAudio);preview.hidden=false;}clearInterval(recordingTimer);const seconds=Math.max(1,Math.round((Date.now()-recordingStartedAt)/1000));state.recordedAudioDuration=seconds;if(status)status.textContent='Voice note ready · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');action.textContent='Record again';};
-      activeRecorder.start(); recordingStartedAt=Date.now(); if(status)status.textContent='Recording 0:00 · tap to stop'; recordingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-recordingStartedAt)/1000);if(status)status.textContent='Recording '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · tap to stop';},250); action.textContent='Stop recording';
-    }).catch(()=>notify('Microphone permission is needed to record a voice note.'));
+      activeRecorder.start(250); recordingStartedAt=Date.now(); if(status)status.textContent='Recording 0:00 · tap to stop'; recordingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-recordingStartedAt)/1000);if(status)status.textContent='Recording '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · tap to stop';},250); action.textContent='Stop recording';
+    }).catch(error=>notify(microphoneError(error)));
     return;
   }
   if(action.dataset.action==='discard-chat-voice'){if(activeRecorder&&['recording','paused'].includes(activeRecorder.state)){discardActiveRecording=true;activeRecorder.stop();}else clearChatVoice();return;}
@@ -802,18 +907,18 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='finish-chat-voice'){if(activeRecorder&&['recording','paused'].includes(activeRecorder.state))activeRecorder.stop();return;}
   if(action.dataset.action==='play-chat-preview'){const audio=$('#chat-voice-preview');if(!audio?.src)return;if(audio.paused){audio.play();action.classList.add('is-playing');}else{audio.pause();action.classList.remove('is-playing');}audio.onended=()=>action.classList.remove('is-playing');return;}
   if(action.dataset.action==='cancel-message-reply'){state.replyToMessage=null;render();return;}
-  if(action.dataset.action==='discard-comment-voice'){const preview=$('#comment-voice-preview');if(preview?.src)URL.revokeObjectURL(preview.src);state.commentAudio=null;if(preview){preview.removeAttribute('src');preview.hidden=true;}action.hidden=true;notify('Voice comment discarded');return;}
+  if(action.dataset.action==='discard-comment-voice'){if(commentRecorder&&['recording','paused'].includes(commentRecorder.state)){discardCommentRecording=true;commentRecorder.stop();}else{clearCommentVoice();notify('Voice comment discarded');}return;}
+  if(action.dataset.action==='finish-comment-voice'){if(commentRecorder&&['recording','paused'].includes(commentRecorder.state))commentRecorder.stop();return;}
   if(action.dataset.action==='record-chat-voice'){
-    startChatVoiceRecording().catch(()=>notify('Microphone permission is needed to record a voice note.'));return;
+    startChatVoiceRecording().catch(error=>notify(microphoneError(error)));return;
   }
   if(action.dataset.action==='record-comment-voice'){
-    if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
-    if(activeRecorder?.state==='recording'){activeRecorder.stop();action.textContent='Processing…';return;}
-    navigator.mediaDevices.getUserMedia({audio:true}).then(stream=>{const chunks=[];const mimeType=preferredAudioMimeType();activeRecorder=new MediaRecorder(stream,mimeType?{mimeType}:undefined);action.classList.add('recording');action.setAttribute('aria-label','Stop recording');activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};activeRecorder.onstop=()=>{stream.getTracks().forEach(track=>track.stop());state.commentAudio=new Blob(chunks,{type:activeRecorder.mimeType||'audio/webm'});action.classList.remove('recording');action.innerHTML=icon('mic');action.setAttribute('aria-label','Record again');const preview=$('#comment-voice-preview');const discard=$('[data-action="discard-comment-voice"]');if(preview){preview.src=URL.createObjectURL(state.commentAudio);preview.hidden=false;}if(discard)discard.hidden=false;notify('Listen to your voice comment, then send or discard it.');};activeRecorder.start();}).catch(()=>notify('Microphone permission is needed.'));return;
+    startCommentVoiceRecording().catch(error=>notify(microphoneError(error)));return;
   }
   if(action.dataset.action==='share-saved'){state.sharePostId=state.activePost;document.body.insertAdjacentHTML('beforeend',shareModal(state.sharePostId));const modal=document.querySelector('.share-modal');if(modal){modal.dataset.postId=state.sharePostId;modal.querySelector('.share-targets')?.insertAdjacentHTML('beforeend',`<button class="share-target" data-action="share-external">${icon('share')}<span><strong>Share link</strong><small>Use your device share menu</small></span>${icon('chevron')}</button><a class="share-target share-link-anchor" href="https://wa.me/?text=${encodeURIComponent(`Check out this StudyLoop post: ${STUDYLOOP_URL}?post=${state.sharePostId}`)}" target="_blank" rel="noopener noreferrer">${icon('share')}<span><strong>Share to WhatsApp</strong><small>Send the post link</small></span>${icon('chevron')}</a>`);}return;}
   if(action.dataset.action==='edit-profile'){document.body.insertAdjacentHTML('beforeend',profileEditorModal());return;}
   if(action.dataset.action==='mark-notifications-read'){notifications.forEach(n=>state.readNotifications.add(n.id));render();return;}
+  if(action.dataset.action==='request-notifications'){if(typeof Notification==='undefined'){notify('Notifications are not supported on this device.');return;}Notification.requestPermission().then(permission=>notify(permission==='granted'?'Notifications enabled':'Notifications remain disabled.')).catch(()=>notify('Unable to request notification permission.'));return;}
   if(action.dataset.action==='reply-comment'){state.replyToCommentId=action.dataset.replyComment;render();return;}
   if(action.dataset.action==='cancel-reply'){state.replyToCommentId=null;render();return;}
   if(action.dataset.action==='save'&&post){const id=String(post.dataset.post);const item=posts.find(entry=>String(entry.id)===id);const willSave=!state.saved.has(id);const update=setSavedPost(state.userId,id,willSave);const savedPost=item?{id:String(item.id),course:item.course,author:item.author,authorId:item.authorId||'',text:item.text||'',imageURL:item.imageURL||null,audioURL:item.audioURL||null,file:item.file||null}:null;const addToChat=willSave&&savedPost?saveCloudMessage({conversationId:`saved_${state.userId}`,participants:[state.userId],senderId:state.userId,type:'savedPost',text:'Saved post',postId:id,post:savedPost}):Promise.resolve();Promise.all([update,addToChat]).then(()=>notify(willSave?'Saved to Saved Messages':'Bookmark removed')).catch(error=>notify(userFacingError(error,'Unable to update Saved Messages.')));}
@@ -846,7 +951,7 @@ document.addEventListener('input',e=>{
 
 document.addEventListener('submit',async e=>{
   if(e.target.id==='auth-form'){e.preventDefault();const data=new FormData(e.target);if(state.authMode==='signup'&&!data.get('terms')){notify('Accept the Terms & Conditions to create your account.');return;}try{const user=state.authMode==='signup'?await signUp(data.get('username'),data.get('email'),data.get('password')):await signIn(data.get('email'),data.get('password'));state.userEmail=user.email;await loadAccountEntitlement(user.uid);state.profileName=state.authMode==='signup'?String(data.get('username')||'').trim():state.profileName;state.isGuest=false;state.isAuthenticated=true;$('.auth-backdrop')?.remove();state.page='home';state.chatOpen=false;notify('Signed in successfully');render();}catch(error){notify(userFacingError(error,'Unable to sign in.'));}}
-  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input?.value.trim()||'';if(!value&&!state.chatAudio)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];const conversationId=conversationIdFor();const replyTo=state.replyToMessage?{id:String(state.replyToMessage.id),sender:String(state.replyToMessage.sender).slice(0,80),text:String(state.replyToMessage.text).slice(0,300)}:null;try{if(state.chatAudio){const extension=baseMimeType(state.chatAudio.type)==='audio/mp4'?'m4a':'webm';const name=`voice-${Date.now()}.${extension}`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'attachment',text:'Voice note',file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url,duration:state.chatAudioDuration},...(replyTo?{replyTo}:{})});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';state.chatAudioDuration=0;}if(value)await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'text',text:value,...(replyTo?{replyTo}:{})});localStorage.removeItem(`studyloop-draft:${state.userId}:${conversationId}`);state.replyToMessage=null;if(input)input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
+  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input?.value.trim()||'';if(!value&&!state.chatAudio)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];const conversationId=conversationIdFor();const replyTo=state.replyToMessage?{id:String(state.replyToMessage.id),sender:String(state.replyToMessage.sender).slice(0,80),text:String(state.replyToMessage.text).slice(0,300)}:null;try{if(state.chatAudio){const extension=baseMimeType(state.chatAudio.type)==='audio/mp4'?'m4a':'webm';const name=`voice-${Date.now()}.${extension}`;const blob=state.chatAudio;const url=await uploadAsset(new File([blob],name,{type:blob.type}),`users/${state.userId}/messages/${name}`);await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'attachment',text:'Voice note',playedBy:[state.userId],file:{name:'Voice note',meta:`${Math.max(1,Math.round(blob.size/1024))} KB`,type:blob.type,url,duration:state.chatAudioDuration},...(replyTo?{replyTo}:{})});if(state.chatAudioURL)URL.revokeObjectURL(state.chatAudioURL);state.chatAudio=null;state.chatAudioURL='';state.chatAudioDuration=0;}if(value)await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'text',text:value,...(replyTo?{replyTo}:{})});localStorage.removeItem(`studyloop-draft:${state.userId}:${conversationId}`);state.replyToMessage=null;if(input)input.value='';render();}catch(error){notify(userFacingError(error,'Unable to send message.'));}}
   if(e.target.id==='channel-form'){
     e.preventDefault();
     if(guestNeedsSignIn('Sign in to create a channel.'))return;
@@ -913,7 +1018,7 @@ document.addEventListener('submit',async e=>{
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(userFacingError(error,'Unable to publish your post.'));}
   }
-  if(e.target.id==='comment-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to comment on this discussion.'))return;const data=new FormData(e.target);const text=String(data.get('comment')||'').trim();const image=data.get('commentImage');if(!text&&!(image instanceof File&&image.size)&&!state.commentAudio){notify('Add text, a picture, or a voice note.');return;}try{const postId=String(state.activePost);const commentId=String(Date.now());const parentId=state.replyToCommentId||null;const [imageURL,audioURL]=await Promise.all([image instanceof File&&image.size?uploadAsset(image,`users/${state.userId}/comments/${postId}/${commentId}-${safeStorageName(image)}`):null,state.commentAudio?uploadAsset(new File([state.commentAudio],`${commentId}.webm`,{type:state.commentAudio.type}),`users/${state.userId}/comments/${postId}/${commentId}.webm`):null]);const commentRef=await saveCloudComment(postId,{authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId});const current=discussionComments[postId]||[];if(!current.some(comment=>comment.id===commentRef.id)){discussionComments[postId]=[...current,normalizeDiscussionComment({id:commentRef.id,authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,parentId,createdAt:new Date()})];}syncPostCommentCount(postId,discussionComments[postId].length);state.commentAudio=null;state.replyToCommentId=null;e.target.reset();render();notify('Comment posted');}catch(error){notify(userFacingError(error,'Unable to post this comment.'));}}
+  if(e.target.id==='comment-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to comment on this discussion.'))return;if(state.commentRecording){notify('Stop the recording before sending it.');return;}const data=new FormData(e.target);const text=String(data.get('comment')||'').trim();const image=data.get('commentImage');if(!text&&!(image instanceof File&&image.size)&&!state.commentAudio){notify('Add text, a picture, or a voice note.');return;}const submit=e.submitter||e.target.querySelector('.send-btn');if(submit)submit.disabled=true;const uploaded=[];try{const postId=String(state.activePost);const commentId=crypto.randomUUID();const parentId=state.replyToCommentId||null;let imageURL=null,audioURL=null;if(image instanceof File&&image.size){imageURL=await uploadAsset(image,`users/${state.userId}/comments/${postId}/${commentId}-${safeStorageName(image)}`);uploaded.push(imageURL);}if(state.commentAudio){const extension=audioExtension(state.commentAudio.type);audioURL=await uploadAsset(new File([state.commentAudio],`${commentId}.${extension}`,{type:state.commentAudio.type}),`users/${state.userId}/comments/${postId}/${commentId}.${extension}`);uploaded.push(audioURL);}const audioDuration=state.commentAudio?state.commentAudioDuration:0;const commentRef=await saveCloudComment(postId,{authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,audioDuration,parentId});const current=discussionComments[postId]||[];if(!current.some(comment=>comment.id===commentRef.id)){discussionComments[postId]=[...current,normalizeDiscussionComment({id:commentRef.id,authorId:state.userId,author:state.profileName,authorPhotoURL:state.profilePhotoURL||'',text,imageURL,audioURL,audioDuration,parentId,createdAt:new Date()})];}syncPostCommentCount(postId,discussionComments[postId].length);clearCommentVoice();state.replyToCommentId=null;e.target.reset();render();notify('Comment posted');}catch(error){await Promise.all(uploaded.map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(userFacingError(error,'Unable to post this comment.'));if(submit)submit.disabled=false;}}
   if(e.target.id==='profile-form'){e.preventDefault();const data=new FormData(e.target);const save=e.target.querySelector('button.primary');const photo=data.get('profilePhoto');if(photo instanceof File&&photo.size&&(photo.size>10*1024*1024||!['image/jpeg','image/png','image/webp'].includes(photo.type))){notify('Choose a JPEG, PNG, or WebP image up to 10 MB.');return;}save.disabled=true;save.textContent='Saving…';try{const profile={username:data.get('displayName').trim(),bio:data.get('bio').trim(),course:data.get('course').trim(),yearLevel:data.get('yearLevel').trim(),photoURL:state.profilePhotoURL};if(photo instanceof File&&photo.size)profile.photoURL=await uploadAsset(photo,`users/${state.userId}/profile/${safeStorageName(photo)}`);await updateUserProfile(state.userId,profile);applyProfile(profile);$('.modal-backdrop')?.remove();render();notify('Profile updated');}catch(error){notify(userFacingError(error,'Unable to save your profile.'));save.disabled=false;save.textContent='Save changes';}}
 });
 
@@ -942,7 +1047,7 @@ document.addEventListener('change',async e=>{
     const storedName=`${Date.now()}-${safeStorageName(file)}`;
     const folder=peer?'messages':'saved';
     const url=await uploadAsset(file,`users/${state.userId}/${folder}/${storedName}`);
-    await saveCloudMessage({conversationId:peer?[state.userId,peer.id].sort().join('_'):`saved_${state.userId}`,participants,senderId:state.userId,type:'attachment',text:peer?'Shared a file':'Saved a file',file:{name:file.name,meta:size,type:file.type,url}});
+    await saveCloudMessage({conversationId:peer?[state.userId,peer.id].sort().join('_'):`saved_${state.userId}`,participants,senderId:state.userId,type:'attachment',text:peer?'Shared a file':'Saved a file',file:{name:file.name,meta:size,type:file.type,url},...(file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})});
     notify(peer?'File sent':'File saved to Saved Messages');
   } catch(error) { notify(userFacingError(error,'Unable to save this file.')); }
   finally { e.target.value='';delete e.target.dataset.destination; }
@@ -966,7 +1071,15 @@ function disconnectUserSubscriptions() {
   for(const stop of [stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopFriendRequests,stopBlocks])stop?.();
   stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopFriendRequests=stopBlocks=undefined;
 }
+
+window.addEventListener('popstate',event=>{
+  const page=event.state?.studyloopPage;
+  if(!page)return;
+  if(state.page==='post-detail'&&page!=='post-detail')abandonCommentVoice();
+  handlingPopState=true;lastHistoryPage=page;state.page=page;state.chatOpen=false;render();handlingPopState=false;
+});
 function resetPrivateState() {
+  abandonCommentVoice();
   disconnectUserSubscriptions();
   currentAuthUid='';inboxMessages=[];state.relations=[];state.blockedUsers=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';chats.splice(0);people.splice(0);notifications.splice(0);
 }
@@ -975,7 +1088,27 @@ async function subscribeActiveMessages() {
   stopActiveMessages?.();
   const conversationId=conversationIdFor();
   if(!conversationId)return;
-  try { stopActiveMessages=await observeMessages(conversationId, messages=>{const chat=chats[state.activeChat];if(!chat)return;const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));const mapped=[];messages.forEach((message,index)=>{if(index===firstUnread)mapped.push({type:'unread-divider'});const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen});else if(message.type==='savedPost'||message.type==='forwardedPost')mapped.push({id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen});else if(message.type==='attachment')mapped.push({id:message.id,type:'attachment',side,time:timeOf(message),file:message.file,seen,replyTo:message.replyTo});else mapped.push({id:message.id,type:'text',side,time:timeOf(message),text:message.text||'',seen,replyTo:message.replyTo,edited:Boolean(message.editedAt)});});if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));render();},error=>console.warn('Unable to load messages',error)); } catch(error) { console.warn('Unable to subscribe to messages',error); }
+  try {
+    stopActiveMessages=await observeMessages(conversationId,messages=>{
+      const chat=chats[state.activeChat];if(!chat)return;
+      const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';
+      const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);
+      const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));
+      const mapped=[];
+      messages.forEach((message,index)=>{
+        if(index===firstUnread)mapped.push({type:'unread-divider'});
+        const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);
+        if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen});
+        else if(message.type==='savedPost'||message.type==='forwardedPost')mapped.push({id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen});
+        else if(message.type==='attachment')mapped.push({id:message.id,type:'attachment',side,time:timeOf(message),senderId:message.senderId,file:message.file,seen,listened:(message.playedBy||[]).some(uid=>uid!==message.senderId),replyTo:message.replyTo});
+        else mapped.push({id:message.id,type:'text',side,time:timeOf(message),text:message.text||'',seen,replyTo:message.replyTo,edited:Boolean(message.editedAt)});
+      });
+      if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}
+      chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';
+      if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));
+      render();
+    },error=>console.warn('Unable to load messages',error));
+  } catch(error) { console.warn('Unable to subscribe to messages',error); }
 }
 
 function showApkPrompt() {
