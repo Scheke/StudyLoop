@@ -15,8 +15,6 @@ const ALLOWED_UPLOAD_TYPES = new Set([...IMAGE_TYPES,...AUDIO_TYPES,...DOCUMENT_
 const UPLOAD_ACCEPT = [...ALLOWED_UPLOAD_TYPES].join(',');
 const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase();
 const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
-const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
-const audioRecorderOptions = () => { const mimeType=preferredAudioMimeType();return {...(mimeType?{mimeType}:{}),audioBitsPerSecond:24000}; };
 function pcmToWav(samples, sampleRate) {
   const targetRate=16000;
   const ratio=sampleRate/targetRate;
@@ -42,14 +40,9 @@ class PcmWavRecorder {
   stop(){if(this.state==='inactive')return;this.state='inactive';this.processor.disconnect();this.source.disconnect();this.sink.disconnect();const length=this.samples.reduce((total,part)=>total+part.length,0);const merged=new Float32Array(length);let offset=0;for(const part of this.samples){merged.set(part,offset);offset+=part.length;}const blob=pcmToWav(merged,this.context.sampleRate||48000);this.context.close?.().catch(()=>{});this.ondataavailable?.({data:blob});Promise.resolve().then(()=>this.onstop?.());}
 }
 function createAudioRecorder(stream) {
-  const options=audioRecorderOptions();
-  try { return new MediaRecorder(stream,options); }
-  catch (preferredCodecError) {
-    try { return new MediaRecorder(stream); }
-    catch (webViewRecorderError) { return new PcmWavRecorder(stream); }
-  }
+  return new PcmWavRecorder(stream);
 }
-const audioExtension = type => ({'audio/mp4':'m4a','audio/ogg':'ogg','audio/mpeg':'mp3','audio/wav':'wav'})[baseMimeType(type)]||'webm';
+const audioExtension = () => 'wav';
 function microphoneError(error) {
   if(!window.isSecureContext)return 'Microphone requires a secure HTTPS connection.';
   if(error?.name==='NotAllowedError'||error?.name==='SecurityError')return 'Microphone access is blocked. Enable it for StudyLoop in phone Settings, then try again.';
@@ -551,7 +544,7 @@ function clearChannelVoice() {
 }
 
 async function startChannelVoiceRecording() {
-  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  if(!navigator.mediaDevices?.getUserMedia)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
   clearChannelVoice();
   const stream=await navigator.mediaDevices.getUserMedia({audio:true});
   activeRecordingStream=stream;
@@ -605,7 +598,7 @@ function clearChatVoice() {
 }
 
 async function startChatVoiceRecording() {
-  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  if(!navigator.mediaDevices?.getUserMedia)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
   clearChatVoice();
   const stream=await navigator.mediaDevices.getUserMedia({audio:true});activeRecordingStream=stream;
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
@@ -661,7 +654,7 @@ function abandonActiveVoiceRecording() {
 }
 
 async function startCommentVoiceRecording() {
-  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
+  if(!navigator.mediaDevices?.getUserMedia)throw Object.assign(new Error('Voice recording is not supported.'),{code:'media/unsupported'});
   if(commentRecorder&&['recording','paused'].includes(commentRecorder.state))return;
   clearCommentVoice();
   const stream=await navigator.mediaDevices.getUserMedia({audio:true});
@@ -934,7 +927,7 @@ document.addEventListener('click',e=>{
   }
   if(action.dataset.action==='voice-speed'){const player=action.closest('[data-voice-player]');const audio=player?.querySelector('audio');if(!audio)return;const speeds=[1,1.5,2];const next=speeds[(speeds.indexOf(audio.playbackRate)+1)%speeds.length];audio.playbackRate=next;action.textContent=`${next}x`;return;}
   if(action.dataset.action==='record-voice'){
-    if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){notify('Voice recording is not supported in this browser.');return;}
+    if(!navigator.mediaDevices?.getUserMedia){notify('Voice recording is not supported in this browser.');return;}
     const status=$('#voice-status'); const preview=$('#voice-preview');
     if(activeRecorder?.state==='recording'){activeRecorder.stop();clearInterval(recordingTimer);action.textContent='Record voice note';return;}
     navigator.mediaDevices.getUserMedia({ audio:true }).then(stream=>{
@@ -1036,7 +1029,7 @@ document.addEventListener('submit',async e=>{
       const id=crypto.randomUUID();const image=assets.find(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFile=assets.find(file=>uploadKind(file)==='document');
       let imageURL=null,audioURL=null,fileURL=null;
       if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
-      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${baseMimeType(audio.type).includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
+      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       if(documentFile){fileURL=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(fileURL);}
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,audioDuration:state.recordedAudioDuration||0,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
       await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
@@ -1055,7 +1048,7 @@ document.addEventListener('submit',async e=>{
       const id=crypto.randomUUID();const image=assets.find(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFile=assets.find(file=>uploadKind(file)==='document');
       let imageURL=null,audioURL=null,fileURL=null;
       if(image){imageURL=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(imageURL);}
-      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audio.type.includes('ogg')?'ogg':'webm'}`);uploaded.push(audioURL);}
+      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       if(documentFile){fileURL=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(fileURL);}
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL,audioURL,audioDuration:state.recordedAudioDuration||0,file:documentFile?{name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url:fileURL}:undefined};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
