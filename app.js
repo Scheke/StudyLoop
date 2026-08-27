@@ -746,7 +746,7 @@ function profileEditorModal() {
 
 function shareModal(postId) {
   const post=posts.find(p=>String(p.id)===String(postId));
-  return `<div class="modal-backdrop" data-action="close-modal"><div class="modal share-modal"><div class="modal-head"><h2>Share this post</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><p class="muted">Choose a destination for “${post?.course||'this post'}”.</p><div class="share-targets"><button class="share-target" data-share-target="saved"><div class="channel-icon green">${icon('bookmark')}</div><span><strong>Saved Messages</strong><small>Keep it in your personal cloud</small></span>${icon('chevron')}</button>${people.map((p,i)=>`<button class="share-target" data-share-target="${i}">${avatar(p,i===1?'green':'')}<span><strong>${p.name}</strong><small>${p.info}</small></span>${icon('chevron')}</button>`).join('')}</div></div></div>`;
+  return `<div class="modal-backdrop" data-action="close-modal"><div class="modal share-modal"><div class="modal-head"><h2>Share this post</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><p class="muted">Choose a destination for “${post?.course||'this post'}”.</p><div class="share-targets">${people.map((p,i)=>`<button class="share-target" data-share-target="${i}">${avatar(p,i===1?'green':'')}<span><strong>${p.name}</strong><small>${p.info}</small></span>${icon('chevron')}</button>`).join('')}</div></div></div>`;
 }
 
 function attachmentForwardModal(messageId) {
