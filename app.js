@@ -1,5 +1,5 @@
 import './styles.css';
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments } from './firebase.js';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments, observeChannelNotificationPreferences, setChannelNotifications } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -85,6 +85,7 @@ const state = {
   acceptedRequests: new Set(),
   messageRequests: [],
   blockedUsers: new Set(),
+  mutedChannels: new Set(),
   relations: [],
   readNotifications: new Set(),
   unreadMessageIds: new Set(),
@@ -116,6 +117,13 @@ window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();def
 window.addEventListener('appinstalled',()=>{deferredInstallPrompt=null;notify('StudyLoop was added to your home screen.');});
 
 const formatMediaTime = seconds => `${Math.floor(Math.max(0,seconds)/60)}:${String(Math.floor(Math.max(0,seconds))%60).padStart(2,'0')}`;
+const timestampMillis = value => value?.toMillis?.() || (value?.seconds ? value.seconds*1000 : (value ? new Date(value).getTime() : 0));
+const messageCanEdit = message => message?.side==='mine' && message?.type==='text' && timestampMillis(message.createdAt)>0 && Date.now()-timestampMillis(message.createdAt)<30*60*1000;
+const messageCanDelete = message => message?.side==='mine' && message?.id && !String(message.id).startsWith('bookmark-') && message.seen!==true;
+const voiceQuotaKey=()=>`studyloop-voice-${state.userId}-${new Date().toISOString().slice(0,10)}`;
+const voiceQuotaCount=()=>Number(localStorage.getItem(voiceQuotaKey())||0);
+const canRecordVoice=()=>state.subscriptionPlan!=='Free'||voiceQuotaCount()<10;
+const consumeVoiceQuota=()=>{if(state.subscriptionPlan==='Free')localStorage.setItem(voiceQuotaKey(),String(voiceQuotaCount()+1));};
 const waveformMarkup = (count=34) => `<span class="voice-waveform" aria-hidden="true">${Array.from({length:count},(_,index)=>`<i style="--bar:${18+((index*17)%28)}%"></i>`).join('')}</span>`;
 
 function voiceNotePlayer(url,duration=0,label='Voice note',options={}) {
@@ -136,6 +144,7 @@ const friendRequests = [];
 const discoverPeople = [];
 const discussionComments = {};
 const notifications = [];
+const knownPostIds = new Set();
 const chats = [];
 const activeUploads = new Map();
 let inboxMessages=[];
@@ -375,7 +384,7 @@ function messageBubble(message) {
     return `<div class="bubble ${message.side}" data-message-id="${escapeHtml(message.id)}">${reply}<span>${escapeHtml(message.text)}</span><div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.edited?'edited · ':''}${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='post-link') {
-    const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
+    const deleteButton=messageCanDelete(message)?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
     return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('share')} Forwarded post</div><button class="post-link-card" data-open-post="${escapeHtml(message.postId)}">${icon('chevron')} Open original post</button><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   if (!Array.isArray(message) && message.type==='attachment') {
@@ -390,7 +399,7 @@ function messageBubble(message) {
     const imageUrl=safeAssetUrl(post.imageURL);
     const audioUrl=safeAssetUrl(post.audioURL);
     const fileMarkup=post.file?(fileUrl?`<a class="forwarded-file" href="${fileUrl}" download="${post.file.name}"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span>${icon('download')}</a>`:`<div class="forwarded-file"><span class="file-icon">PDF</span><span><b>${post.file.name}</b><small>${post.file.meta}</small></span></div>`):'';
-    const deleteButton=message.side==='mine'&&message.id&&!String(message.id).startsWith('bookmark-')?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
+    const deleteButton=messageCanDelete(message)?`<button class="message-delete" data-delete-message="${escapeHtml(message.id)}">Delete</button>`:'';
     return `<div class="bubble ${message.side} forwarded-bubble"><div class="forwarded-label">${icon('bookmark')} Saved post</div><div class="forwarded-post"><strong>From #${post.course}</strong><span class="muted small">${post.author}</span>${post.text?`<p>${post.text}</p>`:''}${imageUrl?`<img class="saved-post-image" src="${imageUrl}" alt="Saved post attachment" data-action="zoom-image" />`:''}${fileMarkup}${audioUrl?voiceNotePlayer(post.audioURL,post.audioDuration||0,'saved voice note'):''}</div><div class="bubble-footer">${deleteButton}<span class="bubble-time">${escapeHtml(message.time)} ${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
   }
   const own=message[0]==='mine'&&message[3];const editButton=own?`<button class="message-share" data-edit-message="${escapeHtml(message[3])}">Edit</button>`:'';const deleteButton=own?`<button class="message-delete" data-delete-message="${escapeHtml(message[3])}">Delete</button>`:'';
@@ -712,7 +721,8 @@ function postDetailPage() {
   const ids=new Set(comments.map(comment=>comment.id));
   const renderComment=(c,isReply=false)=>{const authorIndex=people.findIndex(person=>person.id===c.authorId);return `<article class="discussion-message ${isReply?'comment-reply':''}">${avatar({name:c.name,photoURL:c.authorPhotoURL,initials:c.initials})}<div class="discussion-bubble"><div class="comment-heading">${authorIndex>=0?`<button data-profile="${authorIndex}">${escapeHtml(c.name)}</button>`:`<strong>${escapeHtml(c.name)}</strong>`}${c.authorId===state.userId?`<button class="comment-more" data-delete-comment="${escapeHtml(c.id)}" aria-label="Delete comment">${icon('more')}</button>`:''}</div>${c.text?`<p>${escapeHtml(c.text)}</p>`:''}${safeAssetUrl(c.imageURL)?`<img class="comment-image" src="${safeAssetUrl(c.imageURL)}" alt="Comment attachment" data-action="zoom-image" />`:''}${safeAssetUrl(c.audioURL)?voiceNotePlayer(c.audioURL,c.audioDuration,'voice comment'):''}<div class="discussion-message-footer">${!isReply&&c.id?`<button data-action="reply-comment" data-reply-comment="${escapeHtml(c.id)}">Reply</button>`:''}<span>${escapeHtml(c.ago||relativeTime(c.createdAt))}</span></div></div></article>`;};
   const roots=comments.filter(comment=>!comment.parentId||!ids.has(comment.parentId));
-  const commentHtml=roots.map(root=>`<section class="discussion-thread">${renderComment(root)}${comments.filter(reply=>reply.parentId===root.id).map(reply=>renderComment(reply,true)).join('')}</section>`).join('');
+  const orderedRoots=[...roots].sort((a,b)=>Number(b.authorId===post.authorId)-Number(a.authorId===post.authorId));
+  const commentHtml=orderedRoots.map(root=>`<section class="discussion-thread">${renderComment(root)}${comments.filter(reply=>reply.parentId===root.id).map(reply=>renderComment(reply,true)).join('')}</section>`).join('');
   const replyNotice=state.replyToCommentId?`<div class="compose-reply discussion-reply-notice"><span><b>Replying to a comment</b><small>Replies are limited to one level.</small></span><button type="button" data-action="cancel-reply">${icon('x')}</button></div>`:'';
   return shell(`<div class="discussion-view"><header class="discussion-head"><button class="icon-btn" data-nav="home" aria-label="Back to feed">${icon('arrow')}</button><span><strong>Replies</strong><small>${comments.length} comment${comments.length===1?'':'s'}</small></span><button class="icon-btn" data-action="share" data-post="${escapeHtml(post.id)}" aria-label="Share post">${icon('share')}</button></header><div class="discussion-scroll"><div class="discussion-original">${postCard(post)}</div><div class="discussion-divider"><span>${comments.length?'Replies':'No replies yet'}</span></div><div class="discussion-list">${commentHtml||`<div class="telegram-empty compact-empty"><p>Be the first to reply.</p></div>`}</div></div>${replyNotice}<form id="comment-form" class="comment-compose telegram-comment-compose ${state.commentRecording?'is-recording':state.commentAudio?'is-preview':''}"><div class="comment-compose-idle"><label class="action comment-upload">${icon('paperclip')}<input type="file" name="commentImage" accept="image/jpeg,image/png,image/webp" hidden /></label><input name="comment" autocomplete="off" maxlength="2000" placeholder="${state.replyToCommentId?'Write a reply…':'Write a comment…'}" /><button type="button" class="action" data-action="record-comment-voice" aria-label="Record voice comment">${icon('mic')}</button><button class="send-btn" aria-label="Post comment">${icon('send')}</button></div><div class="comment-compose-recording"><i class="recording-dot"></i><strong id="comment-record-time">0:00</strong>${waveformMarkup(24)}<button type="button" class="recording-cancel" data-action="discard-comment-voice">Cancel</button><button type="button" class="recording-finish" data-action="finish-comment-voice" aria-label="Stop recording">${icon('send')}</button></div><div class="comment-compose-preview"><audio id="comment-voice-preview" controls preload="metadata"></audio><span id="comment-preview-time">${formatMediaTime(state.commentAudioDuration)}</span><button type="button" class="voice-comment-discard" data-action="discard-comment-voice" aria-label="Discard voice comment">${icon('trash')}</button><button class="send-btn" aria-label="Post voice comment">${icon('send')}</button></div></form></div>`,'Replies',false);
 }
@@ -825,7 +835,7 @@ document.addEventListener('click',e=>{
   const forwardChannel=e.target.closest('[data-forward-channel]');
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
   const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
-  const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];if(channel.ownerId===state.userId){notify('Channel owners must remove members before leaving.');return;}setMembership(state.userId,channel.id,false).then(()=>notify(`Left ${channel.name}`)).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
+  const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];setMembership(state.userId,channel.id,false).then(()=>{syncJoinedChannels();render();notify(`Left ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
   const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';scrollChannelToLatest=true;render();return;}
   const deleteComment=e.target.closest('[data-delete-comment]');
   if(deleteComment){const comment=(discussionComments[state.activePost]||[]).find(item=>item.id===deleteComment.dataset.deleteComment);if(comment?.authorId!==state.userId){notify('You can only delete your own comment.');return;}if(confirm('Delete this comment?'))Promise.all([deleteCloudComment(state.activePost,comment.id),deleteUploadedAsset(comment.imageURL).catch(()=>{}),deleteUploadedAsset(comment.audioURL).catch(()=>{})]).then(()=>notify('Comment deleted')).catch(error=>notify(userFacingError(error,'Unable to delete this comment.')));return;}
@@ -838,7 +848,7 @@ document.addEventListener('click',e=>{
     return;
   }
   const editMessage=e.target.closest('[data-edit-message]');
-  if(editMessage){const current=editMessage.closest('.bubble')?.childNodes?.[0]?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
+  if(editMessage){const source=inboxMessages.find(item=>String(item.id)===String(editMessage.dataset.editMessage));if(source&&!messageCanEdit({...source,side:'mine'})){notify('Messages can only be edited for 30 minutes.');return;}const current=source?.text||editMessage.closest('.bubble')?.querySelector('span')?.textContent?.trim()||'';const next=prompt('Edit message',current)?.trim();if(next&&next!==current)updateCloudMessage(editMessage.dataset.editMessage,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));return;}
   const action=e.target.closest('[data-action]'); if(!action)return;
   if(action.dataset.action==='dismiss-apk'){const prompt=action.closest('[data-apk-prompt]');if(prompt?.querySelector('[data-apk-never]')?.checked)persistApkDismissal();prompt?.remove();return;}
   if(action.dataset.action==='install-pwa'){persistApkDismissal();if(deferredInstallPrompt){deferredInstallPrompt.prompt();deferredInstallPrompt.userChoice.then(choice=>{if(choice.outcome!=='accepted')notify('You can install StudyLoop later from Chrome’s menu.');deferredInstallPrompt=null;}).catch(()=>installHelpModal());}else installHelpModal();return;}
@@ -847,19 +857,22 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='message-menu'){
     const bubble=action.closest('[data-message-id]');const messageId=bubble?.dataset.messageId;const source=inboxMessages.find(message=>String(message.id)===String(messageId));if(!source)return;
     const own=source.senderId===state.userId;const attachment=source.type==='attachment';
-    document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop message-menu-backdrop" data-action="close-modal" data-message-id="${escapeHtml(messageId)}"><div class="post-menu"><button class="secondary" data-action="reply-message">${icon('chat')} Reply</button>${own&&source.type==='text'?`<button class="secondary" data-action="edit-message-menu">Edit message</button>`:''}${attachment?`<button class="secondary" data-action="forward-message-menu">${icon('share')} Forward</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-message-menu">Delete message</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;
+    const mappedSource={...source,side:own?'mine':'theirs',seen:(source.seenBy||[]).some(uid=>uid!==source.senderId)};
+    document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop message-menu-backdrop" data-action="close-modal" data-message-id="${escapeHtml(messageId)}"><div class="post-menu"><button class="secondary" data-action="reply-message">${icon('chat')} Reply</button>${messageCanEdit(mappedSource)?`<button class="secondary" data-action="edit-message-menu">Edit message</button>`:''}${attachment?`<button class="secondary" data-action="forward-message-menu">${icon('share')} Forward</button>`:''}${messageCanDelete(mappedSource)?`<button class="secondary danger-action" data-action="delete-message-menu">Delete message</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;
   }
   if(['reply-message','edit-message-menu','forward-message-menu','delete-message-menu'].includes(action.dataset.action)){
     const menu=action.closest('[data-message-id]');const messageId=menu?.dataset.messageId;const source=inboxMessages.find(message=>String(message.id)===String(messageId));if(!source)return;
     if(action.dataset.action==='reply-message'){const sender=source.senderId===state.userId?state.profileName:(people.find(person=>person.id===source.senderId)?.name||'StudyLoop member');state.replyToMessage={id:messageId,sender,text:source.text||source.file?.name||'Attachment'};menu.remove();render();setTimeout(()=>$('#message-input')?.focus(),0);return;}
-    if(action.dataset.action==='edit-message-menu'){const next=prompt('Edit message',source.text||'')?.trim();if(next&&next!==source.text)updateCloudMessage(messageId,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));menu.remove();return;}
+    if(action.dataset.action==='edit-message-menu'){if(!messageCanEdit({...source,side:source.senderId===state.userId?'mine':'theirs'})){notify('Messages can only be edited for 30 minutes.');menu.remove();return;}const next=prompt('Edit message',source.text||'')?.trim();if(next&&next!==source.text)updateCloudMessage(messageId,next).catch(error=>notify(userFacingError(error,'Unable to edit this message.')));menu.remove();return;}
     if(action.dataset.action==='forward-message-menu'){menu.remove();document.body.insertAdjacentHTML('beforeend',attachmentForwardModal(messageId));return;}
-    if(action.dataset.action==='delete-message-menu'){if(confirm('Delete this message?'))deleteCloudMessage(messageId).catch(error=>notify(userFacingError(error,'Unable to delete this message.')));menu.remove();return;}
+    if(action.dataset.action==='delete-message-menu'){if(!messageCanDelete({...source,side:source.senderId===state.userId?'mine':'theirs',id:messageId,seen:(source.seenBy||[]).some(uid=>uid!==source.senderId)})){notify('A message cannot be deleted after it has been seen.');menu.remove();return;}if(confirm('Delete this message?'))deleteCloudMessage(messageId).catch(error=>notify(userFacingError(error,'Unable to delete this message.')));menu.remove();return;}
   }
   if(action.dataset.action==='zoom-image'){document.body.insertAdjacentHTML('beforeend',`<div class="image-lightbox" data-action="close-modal"><img src="${action.src}" alt="Expanded attachment" /></div>`);return;}
   if(action.dataset.action==='channel-jump-bottom'){const list=action.closest('.channel-conversation')?.querySelector('.channel-messages');list?.scrollTo({top:list.scrollHeight,behavior:'smooth'});return;}
   if(action.dataset.action==='open-channel-search'){state.channelSearchOpen=true;render();setTimeout(()=>$('#channel-message-search')?.focus(),0);return;}
   if(action.dataset.action==='close-channel-search'){state.channelSearchOpen=false;state.channelMessageSearch='';render();return;}
+  if(action.dataset.action==='channel-options'){const channel=channels[state.activeChannel];if(!channel)return;const muted=state.mutedChannels.has(String(channel.id));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" data-action="close-modal"><div class="post-menu"><h3>Channel notifications</h3><button class="secondary" data-action="toggle-channel-mute" data-channel-id="${escapeHtml(channel.id)}">${muted?'Unmute notifications':'Mute notifications'}</button><button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
+  if(action.dataset.action==='toggle-channel-mute'){const channelId=String(action.dataset.channelId);const muted=!state.mutedChannels.has(channelId);setChannelNotifications(state.userId,channelId,muted).then(()=>{if(muted)state.mutedChannels.add(channelId);else state.mutedChannels.delete(channelId);action.closest('.modal-backdrop')?.remove();notify(muted?'Channel notifications muted':'Channel notifications enabled');}).catch(error=>notify(userFacingError(error,'Unable to update channel notifications.')));return;}
   if(action.dataset.action==='more'&&post){const item=posts.find(p=>String(p.id)===String(post.dataset.post));const own=item&&item.authorId===state.userId;const downloadable=Boolean(safeAssetUrl(item?.file?.url||item?.imageURL||item?.audioURL));const saved=item&&state.saved.has(String(item.id));document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop post-menu-backdrop" data-action="close-modal" data-post-id="${post.dataset.post}"><div class="post-menu"><button class="secondary" data-action="save-menu">${icon('bookmark')} ${saved?'Remove from Saved Messages':'Save to Saved Messages'}</button><button class="secondary" data-action="share-menu">${icon('share')} Forward</button>${downloadable?`<button class="secondary" data-action="download-post">${icon('download')} Download</button>`:''}${own?`<button class="secondary danger-action" data-action="delete-post">Delete post</button>`:''}<button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
   if(action.dataset.action==='sign-in'){openAuthModal();return;}
   if(action.dataset.action==='chat-options'){const userId=action.dataset.userId;const blocked=state.blockedUsers.has(userId);document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop" data-action="close-modal"><div class="post-menu chat-options-menu"><button class="secondary ${blocked?'':'danger-action'}" data-action="toggle-block-user" data-user-id="${escapeHtml(userId)}">${blocked?'Unblock user':'Block user'}</button><button class="secondary" data-action="close-modal">Cancel</button></div></div>`);return;}
@@ -879,6 +892,8 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='channel-post'){state.recordedAudio=null;document.body.insertAdjacentHTML('beforeend',postComposerModal());return;}
   if(action.dataset.action==='record-channel-voice'){
     if(guestNeedsSignIn('Sign in to record a voice note.'))return;
+    if(!canRecordVoice()){notify('Free accounts can send up to 10 voice notes per day.');return;}
+    consumeVoiceQuota();
     startChannelVoiceRecording().catch(error=>notify(error?.code==='media/unsupported'?'Voice recording is not supported in this browser.':microphoneError(error)));
     return;
   }
@@ -913,8 +928,10 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='voice-speed'){const player=action.closest('[data-voice-player]');const audio=player?.querySelector('audio');if(!audio)return;const speeds=[1,1.5,2];const next=speeds[(speeds.indexOf(audio.playbackRate)+1)%speeds.length];audio.playbackRate=next;action.textContent=`${next}x`;return;}
   if(action.dataset.action==='record-voice'){
     if(!navigator.mediaDevices?.getUserMedia){notify('Voice recording is not supported in this browser.');return;}
+    if(!canRecordVoice()){notify('Free accounts can send up to 10 voice notes per day.');return;}
     const status=$('#voice-status'); const preview=$('#voice-preview');
     if(activeRecorder?.state==='recording'){activeRecorder.stop();clearInterval(recordingTimer);action.textContent='Record voice note';return;}
+    consumeVoiceQuota();
     navigator.mediaDevices.getUserMedia({ audio:true }).then(stream=>{
       activeRecordingStream=stream; const chunks=[];activeRecorder=createAudioRecorder(stream);
       activeRecorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
@@ -931,9 +948,13 @@ document.addEventListener('click',e=>{
   if(action.dataset.action==='discard-comment-voice'){if(commentRecorder&&['recording','paused'].includes(commentRecorder.state)){discardCommentRecording=true;commentRecorder.stop();}else{clearCommentVoice();notify('Voice comment discarded');}return;}
   if(action.dataset.action==='finish-comment-voice'){if(commentRecorder&&['recording','paused'].includes(commentRecorder.state))commentRecorder.stop();return;}
   if(action.dataset.action==='record-chat-voice'){
+    if(!canRecordVoice()){notify('Free accounts can send up to 10 voice notes per day.');return;}
+    consumeVoiceQuota();
     startChatVoiceRecording().catch(error=>notify(microphoneError(error)));return;
   }
   if(action.dataset.action==='record-comment-voice'){
+    if(!canRecordVoice()){notify('Free accounts can send up to 10 voice notes per day.');return;}
+    consumeVoiceQuota();
     startCommentVoiceRecording().catch(error=>notify(microphoneError(error)));return;
   }
   if(action.dataset.action==='share-saved'){state.sharePostId=state.activePost;document.body.insertAdjacentHTML('beforeend',shareModal(state.sharePostId));const modal=document.querySelector('.share-modal');if(modal){modal.dataset.postId=state.sharePostId;modal.querySelector('.share-targets')?.insertAdjacentHTML('beforeend',`<button class="share-target" data-action="share-external">${icon('share')}<span><strong>Share link</strong><small>Use your device share menu</small></span>${icon('chevron')}</button><a class="share-target share-link-anchor" href="https://wa.me/?text=${encodeURIComponent(`Check out this StudyLoop post: ${STUDYLOOP_URL}?post=${state.sharePostId}`)}" target="_blank" rel="noopener noreferrer">${icon('share')}<span><strong>Share to WhatsApp</strong><small>Send the post link</small></span>${icon('chevron')}</a>`);}return;}
@@ -1086,11 +1107,11 @@ document.addEventListener('click',e=>{
   const radio=e.target.closest('[data-visibility]');if(radio){$$('.radio-card').forEach(x=>x.classList.remove('selected'));radio.classList.add('selected');}
 });
 
-let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopFriendRequests, stopBlocks;
+let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopFriendRequests, stopBlocks, stopChannelNotificationPreferences;
 let currentAuthUid='';
 function disconnectUserSubscriptions() {
-  for(const stop of [stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopFriendRequests,stopBlocks])stop?.();
-  stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopFriendRequests=stopBlocks=undefined;
+  for(const stop of [stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopFriendRequests,stopBlocks,stopChannelNotificationPreferences])stop?.();
+  stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopFriendRequests=stopBlocks=stopChannelNotificationPreferences=undefined;
 }
 
 window.addEventListener('popstate',event=>{
@@ -1104,9 +1125,9 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)abandonActi
 function resetPrivateState() {
   abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
-  currentAuthUid='';inboxMessages=[];state.relations=[];state.blockedUsers=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';chats.splice(0);people.splice(0);notifications.splice(0);
+  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';chats.splice(0);people.splice(0);notifications.splice(0);
 }
-function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>(state.memberChannelIds.has(channel.id)||channel.ownerId===state.userId)?index:-1).filter(index=>index>=0)); }
+function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
   stopActiveMessages?.();
   const conversationId=conversationIdFor();
@@ -1115,16 +1136,16 @@ async function subscribeActiveMessages() {
     stopActiveMessages=await observeMessages(conversationId,messages=>{
       const chat=chats[state.activeChat];if(!chat)return;
       const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';
-      const seenByOther=message=>message.participants?.length===1||(message.seenBy||[]).some(uid=>uid!==message.senderId);
+      const seenByOther=message=>message.participants?.length>1&&(message.seenBy||[]).some(uid=>uid!==message.senderId);
       const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));
       const mapped=[];
       messages.forEach((message,index)=>{
         if(index===firstUnread)mapped.push({type:'unread-divider'});
         const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);
-        if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen});
-        else if(message.type==='savedPost'||message.type==='forwardedPost')mapped.push({id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen});
-        else if(message.type==='attachment')mapped.push({id:message.id,type:'attachment',side,time:timeOf(message),senderId:message.senderId,file:message.file,seen,listened:(message.playedBy||[]).some(uid=>uid!==message.senderId),replyTo:message.replyTo});
-        else mapped.push({id:message.id,type:'text',side,time:timeOf(message),text:message.text||'',seen,replyTo:message.replyTo,edited:Boolean(message.editedAt)});
+        if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen,createdAt:message.createdAt});
+        else if(message.type==='savedPost'||message.type==='forwardedPost')mapped.push({id:message.id,type:'forwarded-post',side,time:timeOf(message),post:message.post,seen,createdAt:message.createdAt});
+        else if(message.type==='attachment')mapped.push({id:message.id,type:'attachment',side,time:timeOf(message),senderId:message.senderId,file:message.file,seen,listened:(message.playedBy||[]).some(uid=>uid!==message.senderId),replyTo:message.replyTo,createdAt:message.createdAt});
+        else mapped.push({id:message.id,type:'text',side,time:timeOf(message),text:message.text||'',seen,replyTo:message.replyTo,edited:Boolean(message.editedAt),createdAt:message.createdAt});
       });
       if(state.activeChat===0){const represented=new Set(messages.map(message=>String(message.postId||message.post?.id||'')));for(const postId of state.saved){if(represented.has(String(postId)))continue;const post=posts.find(item=>String(item.id)===String(postId));if(post)mapped.push({id:`bookmark-${postId}`,type:'forwarded-post',side:'mine',time:'Saved',post,seen:true});}}
       chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';
@@ -1144,7 +1165,7 @@ function showApkPrompt() {
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
 async function connectFirebase() {
   try {
-    stopCloudPosts=await observePosts(cloudPosts => { posts.splice(0,posts.length,...cloudPosts.map(post => ({ ...post, id:String(post.id), ago:post.ago||'just now', comments:post.comments||0 }))); render(); }, error => console.warn('Unable to load posts', error));
+    stopCloudPosts=await observePosts(cloudPosts => { const incoming=cloudPosts.map(post => ({ ...post, id:String(post.id), ago:post.ago||'just now', comments:post.comments||0 }));if(knownPostIds.size&&state.isAuthenticated){incoming.filter(post=>!knownPostIds.has(post.id)&&post.authorId!==state.userId&&state.joined.has(channels.findIndex(channel=>channel.id===post.channelId))&&!state.mutedChannels.has(String(post.channelId))).forEach(post=>notifications.unshift({id:`channel-${post.id}`,title:`New post in #${post.course||'channel'}`,body:post.text||'New learning content',createdAt:post.createdAt,createdAtMs:Date.now()}));if(notifications.length>20)notifications.splice(20);}knownPostIds.clear();incoming.forEach(post=>knownPostIds.add(post.id));posts.splice(0,posts.length,...incoming); render(); }, error => console.warn('Unable to load posts', error));
     stopCloudChannels=await observeChannels(cloudChannels => { const normalized=cloudChannels.map(channel=>({ icon:channel.icon||'SL', cls:channel.cls||'', access:channel.access||'Public', members:channel.members||0, desc:channel.desc||'', sub:channel.sub||'', ...channel }));channels.splice(0,channels.length,...normalized);syncJoinedChannels(); render(); }, error => { console.warn('Unable to load channels', error);notify('Unable to load channels. Check your connection and Firebase configuration.'); });
     await observeAuth(async user => {
       if (!user) {
@@ -1161,6 +1182,7 @@ async function connectFirebase() {
       if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();render();},error=>console.warn('Unable to load message notifications',error));
       if (!stopCloudMemberships) stopCloudMemberships=await observeMemberships(user.uid, ids=>{state.memberChannelIds=new Set(ids);syncJoinedChannels();render();}, error=>console.warn('Unable to load memberships',error));
       if (!stopCloudSaved) stopCloudSaved=await observeSaved(user.uid, ids=>{state.saved=new Set(ids);render();}, error=>console.warn('Unable to load saved posts',error));
+      if (!stopChannelNotificationPreferences) stopChannelNotificationPreferences=await observeChannelNotificationPreferences(user.uid, ids=>{state.mutedChannels=new Set(ids);render();}, error=>console.warn('Unable to load channel notification preferences',error));
       if (!stopFriendRequests) stopFriendRequests=await observeFriendRequests(user.uid,relations=>{state.relations=relations;render();},error=>console.warn('Unable to load friend requests',error));
       if (!stopBlocks) stopBlocks=await observeBlocks(user.uid,ids=>{state.blockedUsers=new Set(ids);render();},error=>console.warn('Unable to load blocks',error));
       if (state.page==='landing') state.page='home';

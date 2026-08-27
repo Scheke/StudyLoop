@@ -140,6 +140,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /users/{userId}/channelSettings/{channelId} {
+      allow read: if activeUser() && request.auth.uid == userId;
+      allow create, update: if activeUser() && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['channelId','muted','updatedAt'])
+        && request.resource.data.channelId == channelId
+        && request.resource.data.muted is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if activeUser() && request.auth.uid == userId;
+    }
+
     match /posts/{postId} {
       allow read: if true;
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
@@ -167,6 +177,7 @@ service cloud.firestore {
         && request.resource.data.id == resource.data.id
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text'])
+        && request.time - resource.data.createdAt < duration.value(30, 'm')
         && validText(request.resource.data.author, 80)
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.text, 4000);
@@ -310,9 +321,11 @@ service cloud.firestore {
           && validText(request.resource.data.post.text, 4000)
         ));
       allow read: if activeUser() && request.auth.uid in resource.data.participants;
-      allow delete: if (activeUser() && resource.data.senderId == request.auth.uid) || admin();
+      allow delete: if (activeUser() && resource.data.senderId == request.auth.uid && resource.data.seenBy.toSet().size() == 1) || admin();
       allow update: if activeUser() && request.auth.uid in resource.data.participants && (
         (resource.data.senderId == request.auth.uid
+          && resource.data.type == 'text'
+          && request.time - resource.data.createdAt < duration.value(30, 'm')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text','editedAt'])
           && request.resource.data.editedAt == request.time
           && validText(request.resource.data.text, 4000))
