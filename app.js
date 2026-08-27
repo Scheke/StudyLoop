@@ -1143,11 +1143,17 @@ function resetPrivateState() {
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
   stopActiveMessages?.();
-  const conversationId=conversationIdFor();
+  // Capture the active conversation when subscribing.  Rendering and inbox
+  // synchronisation can replace the `chats` array while a snapshot is in
+  // flight, so looking up `state.activeChat` inside the callback can silently
+  // target the wrong chat and leave the composer stale until navigation.
+  const chatIndex=state.activeChat;
+  const conversationId=conversationIdFor(chatIndex);
   if(!conversationId)return;
   try {
     stopActiveMessages=await observeMessages(conversationId,messages=>{
-      const chat=chats[state.activeChat];if(!chat)return;
+      if(state.activeChat!==chatIndex||conversationIdFor(chatIndex)!==conversationId)return;
+      const chat=chats[chatIndex];if(!chat)return;
       const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';
       const seenByOther=message=>message.participants?.length>1&&(message.seenBy||[]).some(uid=>uid!==message.senderId);
       const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));
