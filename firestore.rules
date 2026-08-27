@@ -35,6 +35,12 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/channels/$(channelId)).data.ownerId == request.auth.uid
       );
     }
+    function canReadChannel(channelId) {
+      return activeUser() && channelExists(channelId) && (
+        get(/databases/$(database)/documents/channels/$(channelId)).data.access == 'Public'
+        || isChannelMember(channelId)
+      );
+    }
     function validMessageParticipants(data) {
       return data.participants is list && (
         (data.participants.size() == 1
@@ -128,7 +134,7 @@ service cloud.firestore {
     }
 
     match /publicProfiles/{userId} {
-      allow read: if true;
+      allow read: if activeUser();
       allow create, update: if activeUser() && request.auth.uid == userId
         && request.resource.data.keys().hasOnly(['username','course','yearLevel','bio','photoURL','updatedAt'])
         && validText(request.resource.data.username, 80)
@@ -151,7 +157,7 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read: if true;
+      allow read: if canReadChannel(resource.data.channelId);
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','createdAt'])
@@ -185,7 +191,7 @@ service cloud.firestore {
     }
 
     match /channels/{channelId} {
-      allow read: if true;
+      allow read: if activeUser();
       allow create: if activeUser() && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL'])
         && validText(request.resource.data.name, 80)
@@ -218,7 +224,7 @@ service cloud.firestore {
     }
 
     match /posts/{postId}/comments/{commentId} {
-      allow read: if true;
+      allow read: if canReadChannel(get(/databases/$(database)/documents/posts/$(postId)).data.channelId);
       allow create: if activeUser()
         && exists(/databases/$(database)/documents/posts/$(postId))
         && request.resource.data.authorId == request.auth.uid

@@ -9,13 +9,17 @@ service firebase.storage {
           || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
+    // Storage paths do not include a channel ID, so exact membership checks
+    // require a future path migration.  Until then, every read is at least
+    // authenticated; public anonymous downloads are not permitted.
+    function canReadPost(postId) { return activeRequester(); }
     function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }
     function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm']; }
     function safeDocument() { return request.resource.contentType in ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain']; }
     function safeStudyFile() { return safeImage() || safeAudio() || safeDocument(); }
 
     match /users/{userId}/profile/{fileName} {
-      allow read: if true;
+      allow read: if activeRequester();
       allow create: if owns(userId)
         && request.resource.size <= 10 * 1024 * 1024
         && safeImage()
@@ -24,7 +28,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/saved/{fileName} {
-      allow read: if owns(userId);
+      allow read: if activeRequester();
       allow create: if owns(userId)
         && request.resource.size <= 50 * 1024 * 1024
         && safeStudyFile()
@@ -33,7 +37,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/posts/{postId}/{fileName} {
-      allow read: if resource != null
+      allow read: if canReadPost(postId)
         && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
       allow create: if owns(userId)
         && request.resource.size <= 50 * 1024 * 1024
@@ -43,7 +47,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/messages/{fileName} {
-      allow read: if activeRequester();
+      allow read: if owns(userId);
       allow create: if owns(userId)
         && request.resource.size <= 50 * 1024 * 1024
         && safeStudyFile()
@@ -52,7 +56,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/comments/{postId}/{fileName} {
-      allow read: if true;
+      allow read: if canReadPost(postId);
       allow create: if owns(userId)
         && request.resource.size <= 50 * 1024 * 1024
         && (safeImage() || safeAudio())
