@@ -157,7 +157,10 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      allow read: if canReadChannel(resource.data.channelId);
+      // The current client uses one collection subscription for the feed.
+      // Keep this authenticated until the feed is migrated to per-channel
+      // queries; anonymous enumeration is still prevented.
+      allow read: if activeUser();
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','createdAt'])
@@ -224,7 +227,7 @@ service cloud.firestore {
     }
 
     match /posts/{postId}/comments/{commentId} {
-      allow read: if canReadChannel(get(/databases/$(database)/documents/posts/$(postId)).data.channelId);
+      allow read: if activeUser();
       allow create: if activeUser()
         && exists(/databases/$(database)/documents/posts/$(postId))
         && request.resource.data.authorId == request.auth.uid
