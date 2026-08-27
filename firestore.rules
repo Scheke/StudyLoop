@@ -187,7 +187,7 @@ service cloud.firestore {
     match /channels/{channelId} {
       allow read: if true;
       allow create: if activeUser() && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt'])
+        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL'])
         && validText(request.resource.data.name, 80)
         && request.resource.data.name.size() > 0
         && validText(request.resource.data.course, 120)
@@ -204,12 +204,14 @@ service cloud.firestore {
         && request.resource.data.ownerId == resource.data.ownerId
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.members == resource.data.members
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','course','sub','access','desc','icon','cls'])
-        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','course','sub','access','desc','icon','cls','imageURL','updatedAt'])
+        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL','updatedAt'])
+        && request.resource.data.updatedAt == request.time
         && validText(request.resource.data.name, 80)
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.sub, 120)
         && validText(request.resource.data.desc, 500)
+        && (!('imageURL' in request.resource.data) || validText(request.resource.data.imageURL, 2048))
         && request.resource.data.access in ['Public','Private']
         && (request.resource.data.access == 'Public' || paidPlan());
       allow delete: if false;
