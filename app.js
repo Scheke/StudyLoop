@@ -1222,6 +1222,9 @@ async function connectFirebase() {
 }
 
 render();
+// Keep the branded startup screen visible long enough for Firebase auth
+// persistence to restore the session, including on a hard refresh.
+setTimeout(()=>document.querySelector('#startup-splash')?.classList.add('is-ready'),1500);
 connectFirebase();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
