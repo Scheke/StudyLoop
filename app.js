@@ -226,6 +226,9 @@ function relativeTime(value) {
   if(seconds<604800) return `${Math.floor(seconds/86400)}d ago`;
   return date.toLocaleDateString([], { month:'short', day:'numeric', year:'numeric' });
 }
+function chatDate(value) { const date=value?.toDate?value.toDate():value?.seconds?new Date(value.seconds*1000):value instanceof Date?value:value?new Date(value):null;return date&&!Number.isNaN(date.getTime())?date:null; }
+function chatTimestamp(value) { const date=chatDate(value);if(!date)return 'Sending';const seconds=Math.max(0,Math.floor((Date.now()-date.getTime())/1000));if(seconds<60)return 'now';if(seconds<3600)return `${Math.floor(seconds/60)} minutes ago`;if(seconds<86400)return `${Math.floor(seconds/3600)} hours ago`;const today=new Date();today.setHours(0,0,0,0);const day=new Date(date);day.setHours(0,0,0,0);const days=Math.round((today-day)/86400000);if(days===1)return 'yesterday';if(days>1&&days<7)return date.toLocaleDateString([],{weekday:'long'});return date.toLocaleDateString([],{day:'numeric',month:'short',year:'numeric'}); }
+function chatDayLabel(value) { const date=chatDate(value);if(!date)return '';const today=new Date();today.setHours(0,0,0,0);const day=new Date(date);day.setHours(0,0,0,0);const days=Math.round((today-day)/86400000);if(days===0)return 'Today';if(days===1)return 'Yesterday';if(days>1&&days<7)return date.toLocaleDateString([],{weekday:'long'});return date.toLocaleDateString([],{day:'numeric',month:'short',year:'numeric'}); }
 function userFacingError(error, fallback='Something went wrong.') {
   const code=String(error?.code||'');
   const messages={
@@ -380,6 +383,7 @@ function channelsPage() {
 
 function messageBubble(message) {
   if (!Array.isArray(message) && message.type==='unread-divider') return `<div class="unread-divider"><span>Unread messages</span></div>`;
+  if (!Array.isArray(message) && message.type==='date-divider') return `<div class="chat-date-divider"><span>${escapeHtml(message.label)}</span></div>`;
   if (!Array.isArray(message) && message.type==='text') {
     const reply=message.replyTo?`<div class="message-reply-preview"><b>${escapeHtml(message.replyTo.sender||'StudyLoop member')}</b><span>${escapeHtml(message.replyTo.text||'Attachment')}</span></div>`:'';
     return `<div class="bubble ${message.side}" data-message-id="${escapeHtml(message.id)}">${reply}<span>${escapeHtml(message.text)}</span><div class="bubble-footer"><button class="bubble-more" data-action="message-menu" aria-label="Message actions">${icon('more')}</button><span class="bubble-time">${escapeHtml(message.time)} ${message.edited?'edited · ':''}${message.side==='mine'?(message.seen?'&#10003;&#10003;':'&#10003;'):''}</span></div></div>`;
@@ -1165,11 +1169,14 @@ async function subscribeActiveMessages() {
     stopActiveMessages=await observeMessages(conversationId,messages=>{
       if(state.activeChat!==chatIndex||conversationIdFor(chatIndex)!==conversationId)return;
       const chat=chats[chatIndex];if(!chat)return;
-      const timeOf=message=>message.createdAt?.toDate?message.createdAt.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Sending';
+      const timeOf=message=>chatTimestamp(message.createdAt);
       const seenByOther=message=>message.participants?.length>1&&(message.seenBy||[]).some(uid=>uid!==message.senderId);
       const firstUnread=messages.findIndex(message=>message.senderId!==state.userId&&!(message.seenBy||[]).includes(state.userId));
       const mapped=[];
+      let previousDay='';
       messages.forEach((message,index)=>{
+        const dayLabel=chatDayLabel(message.createdAt);
+        if(dayLabel&&dayLabel!==previousDay){mapped.push({type:'date-divider',label:dayLabel});previousDay=dayLabel;}
         if(index===firstUnread)mapped.push({type:'unread-divider'});
         const side=message.senderId===state.userId?'mine':'theirs';const seen=seenByOther(message);
         if(message.type==='postLink')mapped.push({id:message.id,type:'post-link',side,time:timeOf(message),postId:message.postId,seen,createdAt:message.createdAt});
