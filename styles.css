@@ -241,6 +241,23 @@ button { color: inherit; }
 .unread-divider span { padding:5px 9px;border-radius:999px;background:#dff3fd; }
 .chat-date-divider { display:flex;justify-content:center;margin:8px 0 12px; }
 .chat-date-divider span { padding:5px 11px;border-radius:999px;background:#dcecf5;color:#547289;font-size:12px;font-weight:700;box-shadow:0 1px 2px rgba(40,87,112,.08); }
+.payment-modal { max-width:600px; }
+.payment-modal h2 { margin:6px 0 14px; }
+.text-button { border:0;background:transparent;color:#617080;font:inherit;cursor:pointer;padding:4px 0; }
+.payment-plan-summary { display:flex;justify-content:space-between;align-items:center;padding:15px 18px;border:1px solid #b8d8fa;background:#eef7ff;border-radius:14px;color:#17212b;margin:12px 0 26px; }
+.payment-plan-summary b,.payment-detail-top strong { color:#0877dc;font-size:22px; }
+.payment-method-grid { display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px; }
+.payment-method { min-height:126px;text-align:left;border:1px solid #dfe7ed;border-radius:18px;background:#fff;padding:20px;display:grid;grid-template-columns:1fr auto;grid-template-rows:auto 1fr;align-items:center;gap:5px;cursor:pointer;color:#17212b;font-size:17px;box-shadow:0 2px 8px rgba(19,49,73,.04); }
+.payment-method:hover { border-color:#229ed9;background:#f8fcff; }
+.payment-method span { font-size:29px;grid-column:1 / 3; }
+.payment-method svg { width:18px;color:#718292; }
+.payment-details-card { border:1px solid #dfe7ed;border-radius:20px;overflow:hidden;margin-top:24px;background:#fff; }
+.payment-detail-top,.payment-detail-row { padding:20px 24px;display:flex;justify-content:space-between;align-items:center;gap:14px;border-bottom:1px solid #e6edf2; }
+.payment-detail-row { padding:12px 24px;color:#657588; }
+.payment-detail-row b { color:#17212b; }
+.payment-whatsapp { display:flex;justify-content:center;align-items:center;gap:9px;margin:18px;background:#25d366;color:white;text-decoration:none;border-radius:16px;padding:17px;font-size:17px;font-weight:700; }
+.payment-details-card .small { text-align:center;margin:0 20px 18px; }
+@media (max-width:520px){.payment-method-grid{grid-template-columns:1fr;gap:10px}.payment-method{min-height:92px}.payment-modal{padding:22px}.payment-detail-top,.payment-detail-row{padding-left:16px;padding-right:16px}}
 .bubble { max-width:70%;padding:10px 13px;border-radius:14px;background:white;box-shadow:0 2px 7px rgba(23,33,43,.06);line-height:1.4; }
 .bubble.mine { align-self:flex-end;background:#dff2fc;border-bottom-right-radius:4px; }
 .bubble.theirs { align-self:flex-start;border-bottom-left-radius:4px; }
