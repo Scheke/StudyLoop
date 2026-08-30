@@ -400,7 +400,7 @@ service cloud.firestore {
     }
 
     match /entitlements/{userId} {
-      allow read: if activeUser() && request.auth.uid == userId;
+      allow read: if (activeUser() && request.auth.uid == userId) || admin();
       allow create, update: if admin()
         && request.resource.data.keys().hasOnly(['plan','storageAddonMB','updatedAt','source'])
         && request.resource.data.plan in ['Free','Student+','Power']
