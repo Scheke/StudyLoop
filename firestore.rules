@@ -21,10 +21,9 @@ service cloud.firestore {
         : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username;
     }
     function paidPlan() {
-      return (request.auth.token.keys().hasAny(['plan']) && request.auth.token.plan in ['Student+','Power']) || (
-        exists(/databases/$(database)/documents/entitlements/$(request.auth.uid))
+      return exists(/databases/$(database)/documents/entitlements/$(request.auth.uid))
         && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.plan in ['Student+','Power']
-      );
+        && get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.expiresAt > request.time;
     }
     function channelExists(channelId) {
       return exists(/databases/$(database)/documents/channels/$(channelId));
@@ -402,10 +401,14 @@ service cloud.firestore {
     match /entitlements/{userId} {
       allow read: if (activeUser() && request.auth.uid == userId) || admin();
       allow create, update: if admin()
-        && request.resource.data.keys().hasOnly(['plan','storageAddonMB','updatedAt','source'])
+        && request.resource.data.keys().hasOnly(['plan','storageAddonMB','expiresAt','updatedAt','source'])
         && request.resource.data.plan in ['Free','Student+','Power']
         && request.resource.data.storageAddonMB is int
         && request.resource.data.storageAddonMB >= 0
+        && ((request.resource.data.plan == 'Free' && request.resource.data.expiresAt == null)
+          || (request.resource.data.plan in ['Student+','Power']
+            && request.resource.data.expiresAt is timestamp
+            && request.resource.data.expiresAt > request.time))
         && request.resource.data.source in ['admin','payment']
         && request.resource.data.updatedAt == request.time;
       allow delete: if admin();
