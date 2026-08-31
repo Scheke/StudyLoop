@@ -172,6 +172,9 @@ button { color: inherit; }
 .small { font-size:13px; }
 .mini-channel { display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #edf2f5; }
 .mini-channel:last-child { border:0; }
+.mini-channel-link { width:100%;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer; }
+.mini-channel-link:hover { background:#f6fbfe; }
+.mini-channel-link:focus-visible { outline:2px solid var(--tg-blue);outline-offset:2px;border-radius:10px; }
 .channel-icon { width:42px;height:42px;flex:0 0 auto;border-radius:12px;display:grid;place-items:center;color:white;font-weight:700;background:linear-gradient(145deg,#36b8ee,#168acd); }
 .channel-icon.green { background:linear-gradient(145deg,#43d7bd,#1ba88c); }
 .channel-icon.purple { background:linear-gradient(145deg,#9a7bf0,#6547c7); }
