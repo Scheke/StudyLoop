@@ -46,6 +46,27 @@ async function createImagePreview(file) {
   const source=URL.createObjectURL(file);
   try{return await new Promise(resolve=>{const image=new Image();image.onload=()=>{const scale=Math.min(1,40/Math.max(image.naturalWidth,image.naturalHeight));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));const context=canvas.getContext('2d');context.fillStyle='#eaf7fc';context.fillRect(0,0,canvas.width,canvas.height);context.drawImage(image,0,0,canvas.width,canvas.height);resolve(canvas.toDataURL('image/jpeg',0.3));};image.onerror=()=>resolve('');image.src=source;});}finally{URL.revokeObjectURL(source);}
 }
+async function mapWithConcurrency(items,limit,worker) {
+  const results=new Array(items.length);let cursor=0;
+  const runners=Array.from({length:Math.min(Math.max(1,limit),items.length)},async()=>{while(cursor<items.length){const index=cursor++;results[index]=await worker(items[index],index);}});
+  await Promise.all(runners);return results;
+}
+async function uploadPostAttachments({id,imageFiles,documentFiles,audio,uploaded}) {
+  const jobs=[
+    ...imageFiles.map((file,index)=>({kind:'image',file,index})),
+    ...documentFiles.map((file,index)=>({kind:'document',file,index})),
+    ...(audio?[{kind:'audio',file:audio,index:0}]:[])
+  ];
+  const completed=await mapWithConcurrency(jobs,3,async job=>{
+    const path=job.kind==='audio'
+      ?`users/${state.userId}/posts/${id}/voice-note.${audioExtension(job.file.type)}`
+      :`users/${state.userId}/posts/${id}/${safeStorageName(job.file)}`;
+    const url=await uploadAsset(job.file,path);uploaded.push(url);return {...job,url};
+  });
+  const images=new Array(imageFiles.length);const files=new Array(documentFiles.length);let audioURL=null;
+  completed.forEach(item=>{if(item.kind==='image')images[item.index]=item.url;else if(item.kind==='audio')audioURL=item.url;else files[item.index]={name:item.file.name,meta:`${Math.max(1,Math.round(item.file.size/1024))} KB`,type:item.file.type,url:item.url};});
+  return {images,files,audioURL};
+}
 function postAttachmentOverflow(post,imageLimit=2,fileLimit=4) {
   const hidden=Math.max(0,postImages(post).length-imageLimit)+Math.max(0,postFiles(post).length-fileLimit);
   return hidden?`<button class="post-view-more" data-open-post="${escapeHtml(post.id)}">View more <span>${hidden} hidden attachment${hidden===1?'':'s'}</span>${icon('chevron')}</button>`:'';
@@ -915,6 +936,7 @@ function usageSummaryHtml(){
 }
 
 document.addEventListener('click',e=>{
+  const appUpdateAction=e.target.closest('[data-app-update]');if(appUpdateAction){const banner=appUpdateAction.closest('[data-app-update-banner]');if(appUpdateAction.dataset.appUpdate==='apply'){appUpdateAction.disabled=true;appUpdateAction.textContent='Updating…';pendingServiceWorkerRegistration?.waiting?.postMessage({type:'SKIP_WAITING'});}else banner?.remove();return;}
   const imageLoader=e.target.closest('[data-load-image]');if(imageLoader){e.preventDefault();loadPostImage(imageLoader);return;}
   const downloadTarget=e.target.closest('[data-download-url]');if(downloadTarget){e.preventDefault();downloadAsset(downloadTarget.dataset.downloadUrl,downloadTarget.dataset.downloadName);return;}
   const legalLink=e.target.closest('.inline-link[data-nav]'); if(legalLink){document.body.insertAdjacentHTML('beforeend',legalModal(legalLink.dataset.nav));return;}
@@ -1175,10 +1197,7 @@ document.addEventListener('submit',async e=>{
     const uploaded=[];
     try{
       const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
-      let audioURL=null;
-      const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
-      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
-      const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
+      const {images,files,audioURL}=await uploadPostAttachments({id,imageFiles,documentFiles,audio,uploaded});
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));submit.disabled=false;e.target.classList.remove('is-publishing');notify(postPublishError(error));}
@@ -1193,10 +1212,7 @@ document.addEventListener('submit',async e=>{
     const uploaded=[];
     try{
       const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
-      let audioURL=null;
-      const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
-      if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
-      const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
+      const {images,files,audioURL}=await uploadPostAttachments({id,imageFiles,documentFiles,audio,uploaded});
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(postPublishError(error));}
@@ -1252,9 +1268,12 @@ document.addEventListener('click',e=>{
 
 let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopCommentCounts, stopFriendRequests, stopBlocks, stopChannelNotificationPreferences;
 let currentAuthUid='';
+let postRetryTimer,channelRetryTimer,postsSubscriptionKey='',awaitingInitialPostSnapshot=true;
 function disconnectUserSubscriptions() {
-  for(const stop of [stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopCommentCounts,stopFriendRequests,stopBlocks,stopChannelNotificationPreferences])stop?.();
-  stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopCommentCounts=stopFriendRequests=stopBlocks=stopChannelNotificationPreferences=undefined;
+  for(const stop of [stopCloudPosts,stopCloudChannels,stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopCommentCounts,stopFriendRequests,stopBlocks,stopChannelNotificationPreferences])stop?.();
+  clearTimeout(postRetryTimer);clearTimeout(channelRetryTimer);postRetryTimer=channelRetryTimer=undefined;
+  stopCloudPosts=stopCloudChannels=stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopCommentCounts=stopFriendRequests=stopBlocks=stopChannelNotificationPreferences=undefined;
+  postsSubscriptionKey='';awaitingInitialPostSnapshot=true;
 }
 function editChannelModal(channel){const access=channel.access||'Public';return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="edit-channel-form"><div class="modal-head"><h2>Edit channel</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Channel name</label><input name="name" maxlength="80" required value="${escapeHtml(channel.name)}" /></div><div class="field"><label>Description</label><textarea name="description" maxlength="500">${escapeHtml(channel.desc||'')}</textarea></div><div class="field"><label>Course <span class="muted small">(optional)</span></label><input name="course" maxlength="120" value="${escapeHtml(channel.course||'')}" /></div><div class="field"><label>Module <span class="muted small">(optional)</span></label><input name="module" maxlength="120" value="${escapeHtml(channel.sub||'')}" /></div><div class="field"><label>Visibility</label><div class="radio-row"><div class="radio-card ${access==='Public'?'selected':''}" data-visibility="Public"><strong>Public</strong><div class="muted small">Anyone can discover and join.</div></div><div class="radio-card ${access==='Private'?'selected':''}" data-visibility="Private"><strong>Private</strong><div class="muted small">Only invited members can join.</div></div></div></div><div class="field"><label>Channel picture</label><input type="file" name="channelImage" accept="image/jpeg,image/png,image/webp" /><span class="muted small">JPEG, PNG, or WebP up to 10 MB.</span></div></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Save changes</button></div></form></div>`;}
 
@@ -1270,7 +1289,7 @@ function resetPrivateState() {
   abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
   loadedPostImages.forEach(url=>URL.revokeObjectURL(url));loadedPostImages.clear();
-  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;chats.splice(0);people.splice(0);notifications.splice(0);
+  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;chats.splice(0);people.splice(0);posts.splice(0);channels.splice(0);notifications.splice(0);
 }
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
@@ -1316,11 +1335,47 @@ function showApkPrompt() {
   if(isInstalledApp()||state.apkPromptDismissed||localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'||document.querySelector('[data-apk-prompt]'))return;
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-backdrop apk-prompt-backdrop" data-action="close-modal" data-apk-prompt><div class="modal apk-prompt"><div class="apk-prompt-icon"><img src="/studyloop-logo.png" alt="StudyLoop" /></div><div class="modal-head"><div><h2>Install StudyLoop</h2><p class="muted">Add StudyLoop to your home screen for reliable voice recording.</p></div><button class="icon-btn" data-action="close-modal" aria-label="Close">${icon('x')}</button></div><label class="apk-never"><input type="checkbox" data-apk-never /> Don’t show this again</label><div class="modal-actions"><button class="secondary" data-action="dismiss-apk">Not now</button><button class="primary" data-action="install-pwa">Install website ${icon('download')}</button></div></div></div>`);
 }
+let pendingServiceWorkerRegistration;
+function showAppUpdatePrompt(registration) {
+  if(!registration?.waiting||document.querySelector('[data-app-update-banner]'))return;
+  pendingServiceWorkerRegistration=registration;
+  document.body.insertAdjacentHTML('beforeend',`<aside class="app-update-banner" data-app-update-banner role="status"><div>${logo()}<span><strong>StudyLoop update ready</strong><small>Reload to get the latest fixes and attachment support.</small></span></div><div><button class="secondary" data-app-update="later">Later</button><button class="primary" data-app-update="apply">Update now</button></div></aside>`);
+}
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
+function applyCloudPosts(cloudPosts) {
+  const incoming=cloudPosts.map(post=>({...post,id:String(post.id),ago:post.ago||'just now',comments:(commentCounts.get(String(post.id))??post.comments??0)}));
+  if(!awaitingInitialPostSnapshot&&knownPostIds.size&&state.isAuthenticated){
+    incoming.filter(post=>!knownPostIds.has(post.id)&&post.authorId!==state.userId&&!state.mutedChannels.has(String(post.channelId))).forEach(post=>notifications.unshift({id:`channel-${post.id}`,title:`New post in #${post.course||'channel'}`,body:post.text||'New learning content',createdAt:post.createdAt,createdAtMs:Date.now()}));
+    if(notifications.length>20)notifications.splice(20);
+  }
+  knownPostIds.clear();incoming.forEach(post=>knownPostIds.add(post.id));posts.splice(0,posts.length,...incoming);awaitingInitialPostSnapshot=false;render();
+}
+function schedulePostRetry(error) {
+  console.warn('Unable to load joined-channel posts; retrying.',error);
+  stopCloudPosts?.();stopCloudPosts=undefined;clearTimeout(postRetryTimer);
+  if(!state.isAuthenticated)return;
+  postRetryTimer=setTimeout(()=>subscribeJoinedPosts(true),3000);
+}
+async function subscribeJoinedPosts(force=false) {
+  const ids=[...state.memberChannelIds].map(String).filter(Boolean).sort();const key=ids.join('|');
+  if(!force&&key===postsSubscriptionKey&&stopCloudPosts)return;
+  stopCloudPosts?.();stopCloudPosts=undefined;clearTimeout(postRetryTimer);postsSubscriptionKey=key;awaitingInitialPostSnapshot=true;knownPostIds.clear();
+  if(!ids.length){posts.splice(0);render();return;}
+  try{stopCloudPosts=await observePosts(ids,applyCloudPosts,schedulePostRetry);}catch(error){schedulePostRetry(error);}
+}
+function scheduleChannelRetry(error) {
+  console.warn('Unable to load channels; retrying.',error);
+  stopCloudChannels?.();stopCloudChannels=undefined;clearTimeout(channelRetryTimer);
+  if(!state.isAuthenticated)return;
+  channelRetryTimer=setTimeout(()=>subscribeCloudChannels(true),3000);
+}
+async function subscribeCloudChannels(force=false) {
+  if(stopCloudChannels&&!force)return;
+  stopCloudChannels?.();stopCloudChannels=undefined;clearTimeout(channelRetryTimer);
+  try{stopCloudChannels=await observeChannels(cloudChannels=>{const normalized=cloudChannels.map(channel=>({icon:channel.icon||'SL',cls:channel.cls||'',access:channel.access||'Public',members:channel.members||0,desc:channel.desc||'',sub:channel.sub||'',...channel}));channels.splice(0,channels.length,...normalized);syncJoinedChannels();render();},scheduleChannelRetry);}catch(error){scheduleChannelRetry(error);}
+}
 async function connectFirebase() {
   try {
-    stopCloudPosts=await observePosts(cloudPosts => { const incoming=cloudPosts.map(post => ({ ...post, id:String(post.id), ago:post.ago||'just now', comments:(commentCounts.get(String(post.id)) ?? post.comments ?? 0) }));if(knownPostIds.size&&state.isAuthenticated){incoming.filter(post=>!knownPostIds.has(post.id)&&post.authorId!==state.userId&&state.joined.has(channels.findIndex(channel=>channel.id===post.channelId))&&!state.mutedChannels.has(String(post.channelId))).forEach(post=>notifications.unshift({id:`channel-${post.id}`,title:`New post in #${post.course||'channel'}`,body:post.text||'New learning content',createdAt:post.createdAt,createdAtMs:Date.now()}));if(notifications.length>20)notifications.splice(20);}knownPostIds.clear();incoming.forEach(post=>knownPostIds.add(post.id));posts.splice(0,posts.length,...incoming); render(); }, error => console.warn('Unable to load posts', error));
-    stopCloudChannels=await observeChannels(cloudChannels => { const normalized=cloudChannels.map(channel=>({ icon:channel.icon||'SL', cls:channel.cls||'', access:channel.access||'Public', members:channel.members||0, desc:channel.desc||'', sub:channel.sub||'', ...channel }));channels.splice(0,channels.length,...normalized);syncJoinedChannels(); render(); }, error => { console.warn('Unable to load channels', error);notify('Unable to load channels. Check your connection and Firebase configuration.'); });
     await observeAuth(async user => {
       if (!user) {
         resetPrivateState();
@@ -1333,10 +1388,11 @@ async function connectFirebase() {
       try { const profile=await waitForUserProfile(user.uid);if(!profile){notify('Your account profile could not be loaded. Please sign in again.');await signOutUser();return;}if(profile.deactivated){await signOutUser();notify('This account has been deactivated.');return;}applyProfile(profile);if(!state.apkPromptDismissed&&localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'){state.apkPromptDismissed=true;setInstallPromptDismissed(user.uid,true).catch(error=>console.warn('Unable to migrate install prompt preference.',error));} } catch (error) { console.warn('Unable to load profile', error);await signOutUser();return; }
       await loadAccountEntitlement(user.uid);
       await loadDownloadUsage(user.uid);
+      await subscribeCloudChannels();
       if (!stopCommentCounts) stopCommentCounts=await observeCommentCounts(counts=>{commentCounts.clear();Object.entries(counts).forEach(([postId,count])=>commentCounts.set(String(postId),count));posts.forEach(post=>{post.comments=commentCounts.get(String(post.id))||0;});render();},error=>console.warn('Unable to load comment counts',error));
       if (!stopCloudUsers) stopCloudUsers=await observeUsers(users => { people.splice(0,people.length,...users.filter(profile=>profile.id!==state.userId).map(profile=>({ id:profile.id, initials:initials(profile.username||'Student'), name:profile.username||'Student', info:[profile.course,profile.yearLevel].filter(Boolean).join(' · '), status:profile.bio||'', photoURL:profile.photoURL||'' }))); friendRequests.splice(0);discoverPeople.splice(0,discoverPeople.length,...people);notifications.splice(0);syncChats(); render(); }, error=>console.warn('Unable to load users',error));
       if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();if(state.page==='messages'&&state.chatOpen)subscribeActiveMessages();render();},error=>console.warn('Unable to load message notifications',error));
-      if (!stopCloudMemberships) stopCloudMemberships=await observeMemberships(user.uid, ids=>{state.memberChannelIds=new Set(ids);syncJoinedChannels();render();}, error=>console.warn('Unable to load memberships',error));
+      if (!stopCloudMemberships) stopCloudMemberships=await observeMemberships(user.uid,ids=>{const next=new Set(ids.map(String));const changed=next.size!==state.memberChannelIds.size||[...next].some(id=>!state.memberChannelIds.has(id));state.memberChannelIds=next;syncJoinedChannels();subscribeJoinedPosts(changed);render();},error=>console.warn('Unable to load memberships',error));
       if (!stopCloudSaved) stopCloudSaved=await observeSaved(user.uid, ids=>{state.saved=new Set(ids);render();}, error=>console.warn('Unable to load saved posts',error));
       if (!stopChannelNotificationPreferences) stopChannelNotificationPreferences=await observeChannelNotificationPreferences(user.uid, ids=>{state.mutedChannels=new Set(ids);render();}, error=>console.warn('Unable to load channel notification preferences',error));
       if (!stopFriendRequests) stopFriendRequests=await observeFriendRequests(user.uid,relations=>{state.relations=relations;render();},error=>console.warn('Unable to load friend requests',error));
@@ -1355,7 +1411,7 @@ connectFirebase();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   let refreshingForServiceWorker=false;
   navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshingForServiceWorker)return;refreshingForServiceWorker=true;location.reload();});
-  window.addEventListener('load',async()=>{try{const registration=await navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'});await registration.update();}catch{}});
+  window.addEventListener('load',async()=>{try{const registration=await navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'});showAppUpdatePrompt(registration);registration.addEventListener('updatefound',()=>{const worker=registration.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed'&&navigator.serviceWorker.controller)showAppUpdatePrompt(registration);});});await registration.update();setInterval(()=>registration.update().catch(()=>{}),15*60_000);}catch(error){console.warn('Unable to check for application updates.',error);}});
 }
 
 if ('serviceWorker' in navigator && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {

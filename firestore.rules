@@ -190,10 +190,10 @@ service cloud.firestore {
     }
 
     match /posts/{postId} {
-      // The current client uses one collection subscription for the feed.
-      // Keep this authenticated until the feed is migrated to per-channel
-      // queries; anonymous enumeration is still prevented.
-      allow read: if activeUser() || admin();
+      // Post queries are scoped to the caller's joined channel IDs. Keep the
+      // membership check here as the authorization boundary; UI filtering is
+      // not treated as access control.
+      allow read: if admin() || (activeUser() && isChannelMember(resource.data.channelId));
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
