@@ -6,17 +6,20 @@ const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}
 const logo = () => `<img class="brand-logo" src="/studyloop-logo.png" alt="StudyLoop logo" />`;
 const STUDYLOOP_URL = 'https://study-loop-one.vercel.app/';
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[character]));
-const safeAssetUrl = value => /^https:\/\/firebasestorage\.googleapis\.com\//i.test(String(value||'')) ? escapeHtml(value) : '';
+const assetUrl = value => /^https:\/\/firebasestorage\.googleapis\.com\//i.test(String(value||'')) ? String(value) : '';
+const safeAssetUrl = value => escapeHtml(assetUrl(value));
 const safeStorageName = file => `${crypto.randomUUID()}${(String(file?.name||'').match(/\.[a-z0-9]{1,8}$/i)||[''])[0].toLowerCase()}`;
 const IMAGE_TYPES = ['image/jpeg','image/png','image/webp'];
 const AUDIO_TYPES = ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm'];
 const DOCUMENT_TYPES = ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
 const ALLOWED_UPLOAD_TYPES = new Set([...IMAGE_TYPES,...AUDIO_TYPES,...DOCUMENT_TYPES]);
 const UPLOAD_ACCEPT = [...ALLOWED_UPLOAD_TYPES].join(',');
+const loadedPostImages = new Map();
 const baseMimeType = value => String(value||'').split(';')[0].trim().toLowerCase();
 const uploadKind = file => IMAGE_TYPES.includes(baseMimeType(file?.type))?'image':AUDIO_TYPES.includes(baseMimeType(file?.type))?'audio':DOCUMENT_TYPES.includes(baseMimeType(file?.type))?'document':'';
 const postFiles = post => Array.isArray(post?.files)&&post.files.length?post.files:(post?.file?[post.file]:[]);
 const postImages = post => Array.isArray(post?.images)&&post.images.length?post.images:(post?.imageURL?[post.imageURL]:[]);
+const safeImagePreview = value => /^data:image\/jpeg;base64,[a-z0-9+/=]+$/i.test(String(value||'')) ? String(value) : '';
 const attachmentSelectionError = files => {
   const kinds=files.map(uploadKind);
   if(files.length>10)return 'Choose up to 10 attachments at a time.';
@@ -28,8 +31,20 @@ function postFileMarkup(post,compact=false,limit=Infinity) {
   return postFiles(post).slice(0,limit).map(file=>{const url=safeAssetUrl(file?.url);return `<div class="file-card ${compact?'compact-file':''}"><div class="file-icon">${baseMimeType(file?.type)==='application/pdf'?'PDF':'FILE'}</div><div class="file-info"><strong>${escapeHtml(file?.name||'Document')}</strong><span>${escapeHtml(file?.meta||'Document')}</span></div>${url?`<button class="download" data-download-url="${url}" data-download-name="${escapeHtml(file?.name||'download')}" aria-label="Download ${escapeHtml(file?.name||'file')}">${icon('download')}</button>`:''}</div>`;}).join('');
 }
 function postImageMarkup(post,className='post-image',limit=Infinity) {
-  const markup=postImages(post).slice(0,limit).map((url,index)=>{const safeUrl=safeAssetUrl(url);return safeUrl?`<img class="${className}" src="${safeUrl}" alt="Post image ${index+1}" data-action="zoom-image" />`:'';}).join('');
+  const previews=Array.isArray(post?.imagePreviews)?post.imagePreviews:[];
+  const markup=postImages(post).slice(0,limit).map((url,index)=>lazyImageMarkup(url,className,`Post image ${index+1}`,previews[index])).join('');
   return markup?`<div class="post-image-grid">${markup}</div>`:'';
+}
+function lazyImageMarkup(url,className,alt,preview='') {
+  const rawUrl=assetUrl(url);const safeUrl=safeAssetUrl(rawUrl);if(!safeUrl)return '';
+  const loadedUrl=loadedPostImages.get(rawUrl);if(loadedUrl)return `<img class="${className}" src="${escapeHtml(loadedUrl)}" alt="${escapeHtml(alt)}" data-action="zoom-image" />`;
+  const safePreview=safeImagePreview(preview);
+  return `<button class="post-image-loader ${className}" data-load-image="${safeUrl}" data-image-class="${escapeHtml(className)}" data-image-alt="${escapeHtml(alt)}" aria-label="Load ${escapeHtml(alt)}">${safePreview?`<img class="image-tiny-preview" src="${safePreview}" alt="" aria-hidden="true" />`:'<i class="image-generic-preview"></i>'}<span>${icon('download')} Tap to load image</span></button>`;
+}
+async function createImagePreview(file) {
+  if(!(file instanceof Blob)||!IMAGE_TYPES.includes(baseMimeType(file.type)))return '';
+  const source=URL.createObjectURL(file);
+  try{return await new Promise(resolve=>{const image=new Image();image.onload=()=>{const scale=Math.min(1,40/Math.max(image.naturalWidth,image.naturalHeight));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));const context=canvas.getContext('2d');context.fillStyle='#eaf7fc';context.fillRect(0,0,canvas.width,canvas.height);context.drawImage(image,0,0,canvas.width,canvas.height);resolve(canvas.toDataURL('image/jpeg',0.3));};image.onerror=()=>resolve('');image.src=source;});}finally{URL.revokeObjectURL(source);}
 }
 function postAttachmentOverflow(post,imageLimit=2,fileLimit=4) {
   const hidden=Math.max(0,postImages(post).length-imageLimit)+Math.max(0,postFiles(post).length-fileLimit);
@@ -288,15 +303,29 @@ async function loadDailyDownloadUsage(userId) {
   catch (error) { console.warn('Unable to load download usage.',error);state.downloadsUsedToday=0; }
 }
 async function downloadAsset(url,name='studyloop-download') {
-  const safeUrl=safeAssetUrl(url);if(!safeUrl){notify('This file is unavailable.');return;}
+  const fetchUrl=assetUrl(url);if(!fetchUrl){notify('This file is unavailable.');return;}
   try{
+    if(state.subscriptionPlan==='Free'){state.downloadsUsedToday=await getDailyDownloadUsage(state.userId);if(state.downloadsUsedToday>=10)throw Object.assign(new Error('Download allowance reached.'),{code:'app/download-limit'});}
+    const response=await fetch(fetchUrl);if(!response.ok)throw new Error('The file could not be downloaded.');
+    const blob=await response.blob();
     if(state.subscriptionPlan==='Free')state.downloadsUsedToday=await claimDailyDownload();
-    const response=await fetch(safeUrl);if(!response.ok)throw new Error('The file could not be downloaded.');
-    const objectUrl=URL.createObjectURL(await response.blob());
+    const objectUrl=URL.createObjectURL(blob);
     const link=document.createElement('a');link.href=objectUrl;link.download=String(name||'studyloop-download');document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),1000);
     notify(state.subscriptionPlan==='Free'?`Download started · ${Math.max(0,10-state.downloadsUsedToday)} remaining today`:'Download started');
     if(state.page==='pricing')render();
   }catch(error){notify(userFacingError(error,'Unable to download this file.'));}
+}
+async function loadPostImage(target) {
+  const fetchUrl=assetUrl(target?.dataset.loadImage);if(!fetchUrl)return;
+  target.disabled=true;target.classList.add('is-loading');
+  try{
+    if(state.subscriptionPlan==='Free'){state.downloadsUsedToday=await getDailyDownloadUsage(state.userId);if(state.downloadsUsedToday>=10)throw Object.assign(new Error('Download allowance reached.'),{code:'app/download-limit'});}
+    const response=await fetch(fetchUrl);if(!response.ok)throw new Error('The image could not be loaded.');
+    const objectUrl=URL.createObjectURL(await response.blob());
+    if(state.subscriptionPlan==='Free')state.downloadsUsedToday=await claimDailyDownload();
+    loadedPostImages.set(fetchUrl,objectUrl);const image=document.createElement('img');image.className=target.dataset.imageClass||'post-image';image.src=objectUrl;image.alt=target.dataset.imageAlt||'Post image';image.dataset.action='zoom-image';target.replaceWith(image);
+    if(state.subscriptionPlan==='Free')notify(`Image loaded · ${Math.max(0,10-state.downloadsUsedToday)} downloads remaining`);
+  }catch(error){target.disabled=false;target.classList.remove('is-loading');notify(userFacingError(error,'Unable to load this image.'));}
 }
 async function waitForUserProfile(userId) {
   for(let attempt=0;attempt<8;attempt+=1){const profile=await getUserProfile(userId);if(profile)return profile;await new Promise(resolve=>setTimeout(resolve,150));}
@@ -882,6 +911,7 @@ function usageSummaryHtml(){
 }
 
 document.addEventListener('click',e=>{
+  const imageLoader=e.target.closest('[data-load-image]');if(imageLoader){e.preventDefault();loadPostImage(imageLoader);return;}
   const downloadTarget=e.target.closest('[data-download-url]');if(downloadTarget){e.preventDefault();downloadAsset(downloadTarget.dataset.downloadUrl,downloadTarget.dataset.downloadName);return;}
   const legalLink=e.target.closest('.inline-link[data-nav]'); if(legalLink){document.body.insertAdjacentHTML('beforeend',legalModal(legalLink.dataset.nav));return;}
   const nav=e.target.closest('[data-nav]'); if(nav){
@@ -1140,12 +1170,12 @@ document.addEventListener('submit',async e=>{
     const submit=e.submitter||e.target.querySelector('.channel-send-text');submit.disabled=true;e.target.classList.add('is-publishing');
     const uploaded=[];
     try{
-      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
+      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
       let audioURL=null;
       const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
-      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));submit.disabled=false;e.target.classList.remove('is-publishing');notify(postPublishError(error));}
   }
@@ -1158,12 +1188,12 @@ document.addEventListener('submit',async e=>{
     const submit=e.target.querySelector('button.primary');submit.disabled=true;submit.textContent='Publishing…';document.querySelector('.modal-backdrop')?.remove();notify('Publishing post…');
     const uploaded=[];
     try{
-      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
+      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
       let audioURL=null;
       const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
-      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(postPublishError(error));}
   }
@@ -1235,6 +1265,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)abandonActi
 function resetPrivateState() {
   abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
+  loadedPostImages.forEach(url=>URL.revokeObjectURL(url));loadedPostImages.clear();
   currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;chats.splice(0);people.splice(0);notifications.splice(0);
 }
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }

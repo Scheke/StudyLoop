@@ -145,6 +145,12 @@ button { color: inherit; }
 .post-image-grid .post-image { width:100%;height:220px;margin:0;object-fit:cover; }
 .post-image-grid .channel-message-image { width:100%;height:190px;max-height:none;object-fit:cover; }
 .post-image-grid .saved-post-image { width:100%;height:160px;max-height:none;margin:0;object-fit:cover; }
+.post-image-loader { position:relative;display:block;overflow:hidden;border:0;padding:0;background:#dcecf4;cursor:pointer; }
+.post-image-loader .image-tiny-preview,.post-image-loader .image-generic-preview { position:absolute;inset:-14px;width:calc(100% + 28px);height:calc(100% + 28px);object-fit:cover;filter:blur(12px);transform:scale(1.08); }
+.post-image-loader .image-generic-preview { background:linear-gradient(135deg,#cce7f3,#eef8fc 48%,#b9deee); }
+.post-image-loader > span { position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;min-width:max-content;padding:8px 11px;border-radius:999px;background:rgba(20,42,57,.78);color:#fff;font-size:12px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.15); }
+.post-image-loader > span .icon { width:15px;height:15px; }
+.post-image-loader.is-loading > span { opacity:.65; }
 .post-author { border:0; background:none; padding:0; font:inherit; font-weight:700; color:inherit; cursor:pointer; text-align:left; }
 .image-lightbox { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:28px; background:rgba(0,0,0,.78); cursor:zoom-out; }
 .image-lightbox img { max-width:96vw; max-height:92vh; object-fit:contain; border-radius:12px; }

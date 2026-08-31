@@ -164,7 +164,7 @@ service cloud.firestore {
       allow read: if activeUser() || admin();
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','audioURL','audioDuration','file','files','createdAt'])
+        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
         && request.resource.data.channelId is string
         && channelExists(request.resource.data.channelId)
         && isChannelMember(request.resource.data.channelId)
@@ -178,12 +178,13 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && (!('imageURL' in request.resource.data) || request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
         && (!('images' in request.resource.data) || validStoredUrls(request.resource.data.images))
+        && (!('imagePreviews' in request.resource.data) || validStoredUrls(request.resource.data.imagePreviews))
         && (!('audioURL' in request.resource.data) || request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
         && (!('files' in request.resource.data) || validStoredFiles(request.resource.data.files))
         && (!('images' in request.resource.data) || !('files' in request.resource.data) || request.resource.data.images.size() + request.resource.data.files.size() <= 10)
         && (!('audioDuration' in request.resource.data) || (request.resource.data.audioDuration is int && request.resource.data.audioDuration >= 0 && request.resource.data.audioDuration <= 600));
       allow update: if activeUser() && resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','audioURL','audioDuration','file','files','createdAt'])
+        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
         && request.resource.data.authorId == resource.data.authorId
         && request.resource.data.channelId == resource.data.channelId
         && isChannelMember(resource.data.channelId)
@@ -346,13 +347,14 @@ service cloud.firestore {
         ))
         && (!('post' in request.resource.data) || (
           request.resource.data.post is map
-          && request.resource.data.post.keys().hasOnly(['id','course','author','authorId','text','imageURL','images','audioURL','file','files'])
+          && request.resource.data.post.keys().hasOnly(['id','course','author','authorId','text','imageURL','images','imagePreviews','audioURL','file','files'])
           && validText(request.resource.data.post.id, 160)
           && validText(request.resource.data.post.course, 120)
           && validText(request.resource.data.post.author, 80)
           && validText(request.resource.data.post.authorId, 160)
           && validText(request.resource.data.post.text, 4000)
           && (!('images' in request.resource.data.post) || validStoredUrls(request.resource.data.post.images))
+          && (!('imagePreviews' in request.resource.data.post) || validStoredUrls(request.resource.data.post.imagePreviews))
           && (!('files' in request.resource.data.post) || validStoredFiles(request.resource.data.post.files))
           && (!('images' in request.resource.data.post) || !('files' in request.resource.data.post) || request.resource.data.post.images.size() + request.resource.data.post.files.size() <= 10)
         ));
