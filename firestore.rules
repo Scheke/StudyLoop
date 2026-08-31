@@ -208,21 +208,32 @@ service cloud.firestore {
         && request.resource.data.access in ['Public','Private']
         && (request.resource.data.access == 'Public' || paidPlan())
         && request.resource.data.createdAt == request.time;
-      allow update: if activeUser() && resource.data.ownerId == request.auth.uid
-        && request.resource.data.ownerId == resource.data.ownerId
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.members == resource.data.members
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','course','sub','access','desc','icon','cls','imageURL','updatedAt'])
-        && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL','updatedAt'])
-        && request.resource.data.updatedAt == request.time
-        && validText(request.resource.data.name, 80)
-        && validText(request.resource.data.course, 120)
-        && validText(request.resource.data.sub, 120)
-        && validText(request.resource.data.desc, 500)
-        && (!('imageURL' in request.resource.data) || validText(request.resource.data.imageURL, 2048))
-        && request.resource.data.access in ['Public','Private']
-        && (request.resource.data.access == 'Public' || paidPlan());
-      allow delete: if false;
+      allow update: if activeUser() && (
+        (resource.data.ownerId == request.auth.uid
+          && request.resource.data.ownerId == resource.data.ownerId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.members == resource.data.members
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','course','sub','access','desc','icon','cls','imageURL','updatedAt'])
+          && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL','updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && validText(request.resource.data.name, 80)
+          && validText(request.resource.data.course, 120)
+          && validText(request.resource.data.sub, 120)
+          && validText(request.resource.data.desc, 500)
+          && (!('imageURL' in request.resource.data) || validText(request.resource.data.imageURL, 2048))
+          && request.resource.data.access in ['Public','Private']
+          && (request.resource.data.access == 'Public' || paidPlan()))
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && request.resource.data.members is int
+          && request.resource.data.members >= 0
+          && ((!exists(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
+              && existsAfter(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
+              && request.resource.data.members == resource.data.members + 1)
+            || (exists(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
+              && !existsAfter(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
+              && request.resource.data.members == resource.data.members - 1)))
+      );
+      allow delete: if activeUser() && resource.data.ownerId == request.auth.uid && resource.data.members <= 1;
     }
 
     match /posts/{postId}/comments/{commentId} {
@@ -262,15 +273,22 @@ service cloud.firestore {
         && request.resource.data.channelId is string
         && membershipId == request.auth.uid + '_' + request.resource.data.channelId
         && request.resource.data.joinedAt == request.time
-        && exists(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
+        && existsAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
         && (
-          get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.access == 'Public'
-          || get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.ownerId == request.auth.uid
-        );
+          getAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.access == 'Public'
+          || getAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.ownerId == request.auth.uid
+        )
+        && getAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.members
+          == (exists(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
+            ? get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.members + 1
+            : 1);
       allow delete: if activeUser() && (
         resource.data.uid == request.auth.uid
         || get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.ownerId == request.auth.uid
-      );
+      )
+        && existsAfter(/databases/$(database)/documents/channels/$(resource.data.channelId))
+        && getAfter(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.members
+          == get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.members - 1;
       allow update: if false;
     }
 
