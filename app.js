@@ -1196,7 +1196,7 @@ document.addEventListener('submit',async e=>{
     const submit=e.submitter||e.target.querySelector('.channel-send-text');submit.disabled=true;e.target.classList.add('is-publishing');
     const uploaded=[];
     try{
-      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
+      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.slice(0,2).map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
       const {images,files,audioURL}=await uploadPostAttachments({id,imageFiles,documentFiles,audio,uploaded});
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
@@ -1211,7 +1211,7 @@ document.addEventListener('submit',async e=>{
     const submit=e.target.querySelector('button.primary');submit.disabled=true;submit.textContent='Publishing…';document.querySelector('.modal-backdrop')?.remove();notify('Publishing post…');
     const uploaded=[];
     try{
-      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
+      const id=crypto.randomUUID();const imageFiles=assets.filter(file=>uploadKind(file)==='image');const imagePreviews=await Promise.all(imageFiles.slice(0,2).map(createImagePreview));const audio=state.recordedAudio||assets.find(file=>uploadKind(file)==='audio');const documentFiles=assets.filter(file=>uploadKind(file)==='document');
       const {images,files,audioURL}=await uploadPostAttachments({id,imageFiles,documentFiles,audio,uploaded});
       const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,imagePreviews,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');

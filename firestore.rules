@@ -15,6 +15,9 @@ service cloud.firestore {
     function validStoredUrls(urls) {
       return urls is list && urls.size() <= 10;
     }
+    function validStoredPreviews(previews) {
+      return previews is list && previews.size() <= 2;
+    }
     function ownsUser(userId) { return signedIn() && request.auth.uid == userId; }
     function activeUser() {
       return signedIn()
@@ -210,7 +213,7 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && (!('imageURL' in request.resource.data) || request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
         && (!('images' in request.resource.data) || validStoredUrls(request.resource.data.images))
-        && (!('imagePreviews' in request.resource.data) || validStoredUrls(request.resource.data.imagePreviews))
+        && (!('imagePreviews' in request.resource.data) || validStoredPreviews(request.resource.data.imagePreviews))
         && (!('audioURL' in request.resource.data) || request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
         && (!('files' in request.resource.data) || validStoredFiles(request.resource.data.files))
         && (!('images' in request.resource.data) || !('files' in request.resource.data) || request.resource.data.images.size() + request.resource.data.files.size() <= 10)
@@ -386,7 +389,7 @@ service cloud.firestore {
           && validText(request.resource.data.post.authorId, 160)
           && validText(request.resource.data.post.text, 4000)
           && (!('images' in request.resource.data.post) || validStoredUrls(request.resource.data.post.images))
-          && (!('imagePreviews' in request.resource.data.post) || validStoredUrls(request.resource.data.post.imagePreviews))
+          && (!('imagePreviews' in request.resource.data.post) || validStoredPreviews(request.resource.data.post.imagePreviews))
           && (!('files' in request.resource.data.post) || validStoredFiles(request.resource.data.post.files))
           && (!('images' in request.resource.data.post) || !('files' in request.resource.data.post) || request.resource.data.post.images.size() + request.resource.data.post.files.size() <= 10)
         ));
