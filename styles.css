@@ -769,7 +769,8 @@ button { color: inherit; }
 .channel-conversation-empty { align-self:center;margin:auto;padding:38px;text-align:center;color:var(--muted); }
 .channel-conversation-empty .channel-icon { margin:0 auto 12px; }
 .channel-conversation-empty h3 { margin:0 0 5px;color:var(--ink); }
-.channel-tab-content { padding:18px; }
+.channel-tab-content { min-width:0;padding:18px; }
+.channel-view > .channel-tab-content { min-height:0;flex:1;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable; }
 .channel-info-sheet { max-width:680px;margin:0 auto; }
 .channel-info-identity { display:grid;justify-items:center;padding:8px 0 18px;text-align:center; }
 .channel-info-identity .channel-icon { width:78px;height:78px;margin-bottom:10px;border-radius:50%;font-size:22px; }
@@ -792,6 +793,8 @@ button { color: inherit; }
 .channel-description-card p { margin:0;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere; }
 .channel-description-card small { display:block;margin-top:8px;color:var(--muted); }
 .channel-about-card .settings-row { padding:13px 0; }
+.channel-about-card .settings-row > span { min-width:0;overflow-wrap:anywhere; }
+.channel-about-card .settings-row strong,.channel-about-card .settings-row small { max-width:100%;white-space:normal;overflow-wrap:anywhere; }
 .channel-static-row { cursor:default; }
 .channel-delete-button { width:calc(100% - 28px);min-height:48px;display:flex;align-items:center;justify-content:center;gap:8px;margin:2px 14px 0;border:1px solid #ffd0d0;border-radius:14px;color:var(--red);background:#fff8f8;font-weight:700;cursor:pointer; }
 .channel-delete-button .icon { width:19px;height:19px; }
