@@ -150,6 +150,9 @@ button { color: inherit; }
 .image-lightbox img { max-width:96vw; max-height:92vh; object-fit:contain; border-radius:12px; }
 .post-audio { width:100%;margin:12px 0; }
 .file-card { display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);background:#fbfdff;border-radius:13px; }
+.post-view-more { width:100%;display:flex;align-items:center;justify-content:center;gap:7px;margin:9px 0 2px;padding:9px 12px;border:1px solid #b8dff2;border-radius:11px;background:#f3faff;color:var(--tg-blue-dark);font:inherit;font-size:13px;font-weight:700;cursor:pointer; }
+.post-view-more span { color:var(--muted);font-size:11px;font-weight:500; }
+.post-view-more .icon { width:15px;height:15px; }
 .file-icon { width:42px;height:48px;border-radius:8px;display:grid;place-items:center;color:white;background:linear-gradient(145deg,#ff6c64,#df3434);font-size:12px;font-weight:700; }
 .file-info { flex:1;min-width:0; }
 .file-info strong { display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }

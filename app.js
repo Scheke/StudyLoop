@@ -24,12 +24,16 @@ const attachmentSelectionError = files => {
   if(kinds.filter(kind=>kind==='audio').length>1)return 'Use up to one audio file per post. You can include multiple documents.';
   return '';
 };
-function postFileMarkup(post,compact=false) {
-  return postFiles(post).map(file=>{const url=safeAssetUrl(file?.url);return `<div class="file-card ${compact?'compact-file':''}"><div class="file-icon">${baseMimeType(file?.type)==='application/pdf'?'PDF':'FILE'}</div><div class="file-info"><strong>${escapeHtml(file?.name||'Document')}</strong><span>${escapeHtml(file?.meta||'Document')}</span></div>${url?`<button class="download" data-download-url="${url}" data-download-name="${escapeHtml(file?.name||'download')}" aria-label="Download ${escapeHtml(file?.name||'file')}">${icon('download')}</button>`:''}</div>`;}).join('');
+function postFileMarkup(post,compact=false,limit=Infinity) {
+  return postFiles(post).slice(0,limit).map(file=>{const url=safeAssetUrl(file?.url);return `<div class="file-card ${compact?'compact-file':''}"><div class="file-icon">${baseMimeType(file?.type)==='application/pdf'?'PDF':'FILE'}</div><div class="file-info"><strong>${escapeHtml(file?.name||'Document')}</strong><span>${escapeHtml(file?.meta||'Document')}</span></div>${url?`<button class="download" data-download-url="${url}" data-download-name="${escapeHtml(file?.name||'download')}" aria-label="Download ${escapeHtml(file?.name||'file')}">${icon('download')}</button>`:''}</div>`;}).join('');
 }
-function postImageMarkup(post,className='post-image') {
-  const markup=postImages(post).map((url,index)=>{const safeUrl=safeAssetUrl(url);return safeUrl?`<img class="${className}" src="${safeUrl}" alt="Post image ${index+1}" data-action="zoom-image" />`:'';}).join('');
+function postImageMarkup(post,className='post-image',limit=Infinity) {
+  const markup=postImages(post).slice(0,limit).map((url,index)=>{const safeUrl=safeAssetUrl(url);return safeUrl?`<img class="${className}" src="${safeUrl}" alt="Post image ${index+1}" data-action="zoom-image" />`:'';}).join('');
   return markup?`<div class="post-image-grid">${markup}</div>`:'';
+}
+function postAttachmentOverflow(post,imageLimit=2,fileLimit=4) {
+  const hidden=Math.max(0,postImages(post).length-imageLimit)+Math.max(0,postFiles(post).length-fileLimit);
+  return hidden?`<button class="post-view-more" data-open-post="${escapeHtml(post.id)}">View more <span>${hidden} hidden attachment${hidden===1?'':'s'}</span>${icon('chevron')}</button>`:'';
 }
 const preferredAudioMimeType = () => ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>window.MediaRecorder?.isTypeSupported?.(type))||'';
 function createAudioRecorder(stream) {
@@ -352,8 +356,9 @@ function guestNeedsSignIn(message) {
   return true;
 }
 
-function postCard(post) {
+function postCard(post,{full=false}={}) {
   post={...post,audioURL:safeAssetUrl(post.audioURL)};
+  const showAll=full||state.page==='post-detail';
   const saved=state.saved.has(post.id);
   const channelIndex=channels.findIndex(channel=>channel.name===post.course);
   const authorIndex=people.findIndex(person=>person.id===post.authorId);
@@ -361,8 +366,9 @@ function postCard(post) {
   return `<article class="card feed-card" data-post="${escapeHtml(post.id)}">
     <div class="post-head">${avatar({ ...post, photoURL:post.authorPhotoURL||post.photoURL },post.avatar||'')}<div class="post-who">${authorIndex>=0?`<button class="post-author" data-profile="${authorIndex}">${escapeHtml(post.author)}</button>`:`<strong class="post-author">${escapeHtml(post.author)}</strong>`}<div class="post-meta">${escapeHtml(relativeTime(post.createdAt||post.ago))}</div></div>${channelIndex>=0?`<button class="course-label" data-open-channel="${channelIndex}" aria-label="Open ${escapeHtml(post.course)}"><span class="dot-icon">${escapeHtml(post.icon)}</span><span>From <b>#${escapeHtml(post.course)}</b></span>${icon('chevron')}</button>`:`<span class="course-label"><span class="dot-icon">${escapeHtml(post.icon)}</span><span>From <b>#${escapeHtml(post.course)}</b></span></span>`}<button class="action" data-action="more" aria-label="More">${icon('more')}</button></div>
     ${post.text?`<p class="post-text">${escapeHtml(post.text)}</p>`:''}
-    ${postImageMarkup(post)}
-    ${postFileMarkup(post)}
+    ${postImageMarkup(post,'post-image',showAll?Infinity:2)}
+    ${postFileMarkup(post,false,showAll?Infinity:4)}
+    ${showAll?'':postAttachmentOverflow(post)}
     ${post.audioURL?`<audio class="post-audio" controls src="${post.audioURL}"></audio>`:post.audio?`<div class="audio"><button class="play" data-action="play" aria-label="Play voice note">▶</button><div class="wave"></div><span class="muted small">01:45</span></div>`:''}
     ${post.note?`<div class="file-card" style="background:#fffaf0;min-height:100px;justify-content:center;color:#7d694c"><strong>0/1 Knapsack</strong><span class="muted"> recurrence → dp[i][w] = max(…)</span></div>`:''}
     <div class="post-actions"><button class="action" data-action="comments">${icon('chat')} ${post.comments}</button><button class="action push ${saved?'active':''}" data-action="save">${icon('bookmark')} <span>${saved?'Saved':'Save'}</span></button><button class="action" data-action="share">${icon('share')} <span>Share</span></button>${post.author===state.profileName?`<button class="action" data-action="delete-post">Delete</button>`:''}</div>
@@ -504,8 +510,9 @@ function channelPostBubble(post) {
     <article class="channel-message-bubble" data-post="${escapeHtml(post.id)}">
       <div class="channel-message-head">${authorIndex>=0?`<button class="post-author" data-profile="${authorIndex}">${escapeHtml(post.author)}</button>`:`<strong>${escapeHtml(post.author)}</strong>`}<button class="action" data-action="more" aria-label="More options">${icon('more')}</button></div>
       ${post.text?`<p class="channel-message-text">${escapeHtml(post.text)}</p>`:''}
-      ${postImageMarkup(post,'channel-message-image')}
-      ${postFileMarkup(post,true)}
+      ${postImageMarkup(post,'channel-message-image',2)}
+      ${postFileMarkup(post,true,4)}
+      ${postAttachmentOverflow(post)}
       ${audioUrl?voiceNotePlayer(audioUrl,post.audioDuration||0):''}
       <div class="channel-message-footer"><button class="action comment-count" data-action="comments" aria-label="Comments">${icon('chat')} ${Number(post.comments)||0}</button><button class="action channel-share" data-action="share" aria-label="Share post">${icon('share')}</button><span>${escapeHtml(channelPostTime(post.createdAt))}</span></div>
     </article>
@@ -910,7 +917,7 @@ document.addEventListener('click',e=>{
   const savedChat=e.target.closest('[data-saved-chat]'); if(savedChat){if(guestNeedsSignIn('Sign in to access Saved Messages.'))return;state.activeChat=0;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const personChat=e.target.closest('[data-person-chat]'); if(personChat){if(guestNeedsSignIn('Sign in to message classmates.'))return;state.activeChat=+personChat.dataset.personChat+1;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const profile=e.target.closest('[data-profile]'); if(profile){state.profileUser=+profile.dataset.profile;state.page='user-profile';render();return;}
-  const openPost=e.target.closest('[data-open-post]'); if(openPost){const index=posts.findIndex(item=>String(item.id)===String(openPost.dataset.openPost));if(index<0){notify('This post is no longer available.');return;}state.activePost=posts[index].id;state.page='post-detail';render();return;}
+  const openPost=e.target.closest('[data-open-post]'); if(openPost){const index=posts.findIndex(item=>String(item.id)===String(openPost.dataset.openPost));if(index<0){notify('This post is no longer available.');return;}state.activePost=posts[index].id;state.page='post-detail';subscribeActiveComments();render();return;}
   const forwardMessage=e.target.closest('[data-forward-message]'); if(forwardMessage){document.body.insertAdjacentHTML('beforeend',attachmentForwardModal(forwardMessage.dataset.forwardMessage));return;}
   const forwardPerson=e.target.closest('[data-forward-person]');
   if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file,...(source.file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
