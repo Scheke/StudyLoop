@@ -1138,7 +1138,7 @@ document.addEventListener('submit',async e=>{
       const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
-      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,images,audioURL,audioDuration:state.recordedAudioDuration||0,files};
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);clearChannelVoice();scrollChannelToLatest=true;render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));submit.disabled=false;e.target.classList.remove('is-publishing');notify(postPublishError(error));}
   }
@@ -1156,7 +1156,7 @@ document.addEventListener('submit',async e=>{
       const images=[];for(const image of imageFiles){const url=await uploadAsset(image,`users/${state.userId}/posts/${id}/${safeStorageName(image)}`);uploaded.push(url);images.push(url);}
       if(audio){audioURL=await uploadAsset(audio,`users/${state.userId}/posts/${id}/voice-note.${audioExtension(audio.type)}`);uploaded.push(audioURL);}
       const files=[];for(const documentFile of documentFiles){const url=await uploadAsset(documentFile,`users/${state.userId}/posts/${id}/${safeStorageName(documentFile)}`);uploaded.push(url);files.push({name:documentFile.name,meta:`${Math.max(1,Math.round(documentFile.size/1024))} KB`,type:documentFile.type,url});}
-      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,images,audioURL,audioDuration:state.recordedAudioDuration||0,files};
+      const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text,comments:0,imageURL:images[0]||null,images,audioURL,audioDuration:state.recordedAudioDuration||0,file:files[0]||null,files};
       await saveCloudPost(post,state.userId);state.recordedAudio=null;state.page='channel-detail';state.channelTab='posts';render();notify('Post published');
     }catch(error){await Promise.all(uploaded.filter(Boolean).map(url=>deleteUploadedAsset(url).catch(()=>{})));notify(postPublishError(error));}
   }
@@ -1311,7 +1311,9 @@ render();
 setTimeout(()=>document.querySelector('#startup-splash')?.classList.add('is-ready'),4000);
 connectFirebase();
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  let refreshingForServiceWorker=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(refreshingForServiceWorker)return;refreshingForServiceWorker=true;location.reload();});
+  window.addEventListener('load',async()=>{try{const registration=await navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'});await registration.update();}catch{}});
 }
 
 if ('serviceWorker' in navigator && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {

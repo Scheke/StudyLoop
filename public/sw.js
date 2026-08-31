@@ -1,4 +1,4 @@
-const CACHE_NAME = 'studyloop-shell-v4';
+const CACHE_NAME = 'studyloop-shell-v5';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/studyloop-logo.png'];
 
 self.addEventListener('install', (event) => {
@@ -23,7 +23,7 @@ self.addEventListener('fetch', (event) => {
   if (requestUrl.origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, event.request.mode === 'navigate' ? { cache: 'no-store' } : undefined)
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
