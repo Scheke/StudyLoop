@@ -30,6 +30,7 @@ const RATE_POLICIES = {
   message: { limit:20, windowMs:60_000 },
   post: { limit:5, windowMs:60_000 },
   comment: { limit:15, windowMs:60_000 },
+  download: { limit:10, windowMs:24*60*60_000 },
   friendRequest: { limit:10, windowMs:60*60_000 },
   report: { limit:5, windowMs:60*60_000 },
 };
@@ -47,7 +48,7 @@ async function rateLimitedWrite(action, write) {
     const startedAt=previous?.windowStartedAt?.toMillis?.()||0;
     const reset=!previous||Date.now()-startedAt>=policy.windowMs;
     const count=reset?1:Number(previous.count||0)+1;
-    if(count>policy.limit)throw Object.assign(new Error('Please wait before trying again.'),{code:'app/rate-limited'});
+    if(count>policy.limit)throw Object.assign(new Error('Please wait before trying again.'),{code:action==='download'?'app/download-limit':'app/rate-limited'});
     transaction.set(rateRef,{uid:user.uid,action,count,windowStartedAt:reset?s.firestoreApi.serverTimestamp():previous.windowStartedAt,updatedAt:s.firestoreApi.serverTimestamp()});
     result=await write(transaction,s);
   });
@@ -76,6 +77,8 @@ export async function deactivateUser(uid) { const s = await getServices(); retur
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
 export async function setInstallPromptDismissed(uid, dismissed=true) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'users',uid),{apkPromptDismissed:Boolean(dismissed),updatedAt:s.firestoreApi.serverTimestamp()}); }
 export async function getAccountEntitlement(uid) { const s=await getServices();const snapshot=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'entitlements',uid));if(!snapshot.exists())return 'Free';const entitlement=snapshot.data();const expiresAt=entitlement.expiresAt?.toMillis?.()||0;return ['Student+','Power'].includes(entitlement.plan)&&expiresAt>Date.now()?entitlement.plan:'Free'; }
+export async function getDailyDownloadUsage(uid) { const s=await getServices();const snapshot=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'rateLimits',`${uid}_download`));if(!snapshot.exists())return 0;const usage=snapshot.data();const startedAt=usage.windowStartedAt?.toMillis?.()||0;return Date.now()-startedAt<24*60*60_000?Math.max(0,Number(usage.count)||0):0; }
+export async function claimDailyDownload() { await rateLimitedWrite('download',()=>true);const s=await getServices();const uid=s.auth.currentUser?.uid;if(!uid)throw Object.assign(new Error('Sign in before downloading.'),{code:'app/not-authorized'});return getDailyDownloadUsage(uid); }
 export async function updateUserProfile(uid, profile) { const s = await getServices(); const publicProfile={ username:profile.username, course:profile.course, yearLevel:profile.yearLevel, bio:profile.bio, photoURL:profile.photoURL }; await s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'publicProfiles', uid), { ...publicProfile, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
 export async function observeAuth(callback) { const s = await getServices(); return s.authApi.onAuthStateChanged(s.auth, callback); }
 export async function observePosts(onChange, onError) { const s = await getServices(); const query = s.firestoreApi.query(s.firestoreApi.collection(s.db, 'posts'), s.firestoreApi.orderBy('createdAt', 'desc')); return s.firestoreApi.onSnapshot(query, snapshot => onChange(snapshot.docs.map(doc => ({ id:doc.id, ...doc.data() }))), onError); }

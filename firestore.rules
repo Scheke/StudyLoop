@@ -460,6 +460,7 @@ service cloud.firestore {
         request.auth.uid + '_message',
         request.auth.uid + '_post',
         request.auth.uid + '_comment',
+        request.auth.uid + '_download',
         request.auth.uid + '_friendRequest',
         request.auth.uid + '_report'
       ];
@@ -469,11 +470,12 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.count is int
         && request.resource.data.count > 0
-        && request.resource.data.action in ['message','post','comment','friendRequest','report']
+        && request.resource.data.action in ['message','post','comment','download','friendRequest','report']
         && (
           (request.resource.data.action == 'message' && rateConsumed('message', 20, duration.value(60, 's')))
           || (request.resource.data.action == 'post' && rateConsumed('post', 5, duration.value(60, 's')))
           || (request.resource.data.action == 'comment' && rateConsumed('comment', 15, duration.value(60, 's')))
+          || (request.resource.data.action == 'download' && rateConsumed('download', 10, duration.value(24, 'h')))
           || (request.resource.data.action == 'friendRequest' && rateConsumed('friendRequest', 10, duration.value(3600, 's')))
           || (request.resource.data.action == 'report' && rateConsumed('report', 5, duration.value(3600, 's')))
         );

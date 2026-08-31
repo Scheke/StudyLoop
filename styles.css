@@ -278,7 +278,7 @@ button { color: inherit; }
 .message-reply-preview b { color:var(--tg-blue-dark);font-size:11px; }
 .message-reply-preview span { max-width:260px;color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .message-delete { border:0;background:transparent;color:#d94b4b;font:inherit;font-size:11px;padding:0;cursor:pointer; }
-.forwarded-file { color:inherit;text-decoration:none; }
+.forwarded-file { color:inherit;text-decoration:none;width:100%;font:inherit;text-align:left;cursor:pointer; }
 .message-share { border:0;background:transparent;color:var(--tg-blue);font:inherit;font-size:11px;padding:0;cursor:pointer; }
 .post-link-card { width:100%;display:flex;align-items:center;gap:8px;border:1px solid #b8dff2;background:#fff;color:var(--tg-blue-dark);border-radius:10px;padding:11px 12px;font:inherit;font-weight:700;cursor:pointer; }
 .post-link-card .icon { width:16px;height:16px; }
