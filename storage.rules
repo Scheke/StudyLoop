@@ -30,7 +30,7 @@ service firebase.storage {
     match /users/{userId}/saved/{fileName} {
       allow read: if activeRequester();
       allow create: if owns(userId)
-        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.size <= 200 * 1024 * 1024
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
@@ -40,7 +40,7 @@ service firebase.storage {
       allow read: if canReadPost(postId)
         && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
       allow create: if owns(userId)
-        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.size <= 200 * 1024 * 1024
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
@@ -49,7 +49,7 @@ service firebase.storage {
     match /users/{userId}/messages/{fileName} {
       allow read: if owns(userId);
       allow create: if owns(userId)
-        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.size <= 200 * 1024 * 1024
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
@@ -58,7 +58,7 @@ service firebase.storage {
     match /users/{userId}/comments/{postId}/{fileName} {
       allow read: if canReadPost(postId);
       allow create: if owns(userId)
-        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.size <= 200 * 1024 * 1024
         && (safeImage() || safeAudio())
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
