@@ -42,13 +42,11 @@ service cloud.firestore {
         && (!('deactivated' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
           || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
-    function publicProfile() {
-      return get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data;
-    }
     function profileUsername() {
-      return exists(/databases/$(database)/documents/publicProfiles/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data.username
-        : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username;
+      // The private account profile is the canonical source used to populate
+      // the composer. Public profile replication can lag or be absent on
+      // accounts created before publicProfiles was introduced.
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.username;
     }
     function paidPlan() {
       return exists(/databases/$(database)/documents/entitlements/$(request.auth.uid))
@@ -191,7 +189,7 @@ service cloud.firestore {
         && channelExists(request.resource.data.channelId)
         && isChannelMember(request.resource.data.channelId)
         && validText(request.resource.data.author, 80)
-        && request.resource.data.author == publicProfile().username
+        && request.resource.data.author == profileUsername()
         && validText(request.resource.data.initials, 4)
         && validText(request.resource.data.course, 120)
         && (request.resource.data.text == null || validText(request.resource.data.text, 4000))

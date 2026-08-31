@@ -108,14 +108,14 @@ export async function deleteCloudComment(postId, commentId) { const s=await getS
 export async function observeCloudComments(postId,onChange,onError) { const s=await getServices();return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db,'posts',String(postId),'comments'),snapshot=>onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))),onError); }
 export async function observeCommentCounts(onChange,onError) { const s=await getServices();const query=s.firestoreApi.collectionGroup(s.db,'comments');return s.firestoreApi.onSnapshot(query,snapshot=>{const counts={};snapshot.docs.forEach(item=>{const postId=item.ref.parent.parent?.id;if(postId)counts[postId]=(counts[postId]||0)+1;});onChange(counts);},onError); }
 export async function report(type, targetId, reason, userId) { return rateLimitedWrite('report',(transaction,s)=>{const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'reports'));transaction.set(ref,{type,targetId,reason,userId,createdAt:s.firestoreApi.serverTimestamp()});return ref;}); }
-export async function saveCloudPost(post, userId) { const clean=Object.fromEntries(Object.entries({...post}).filter(([,value])=>value!==undefined));return rateLimitedWrite('post',(transaction,s)=>transaction.set(s.firestoreApi.doc(s.db,'posts',String(post.id)),{...clean,createdAt:s.firestoreApi.serverTimestamp()})); }
+export async function saveCloudPost(post, userId) { const clean=Object.fromEntries(Object.entries({...post}).filter(([,value])=>value!==undefined));try{return await rateLimitedWrite('post',(transaction,s)=>transaction.set(s.firestoreApi.doc(s.db,'posts',String(post.id)),{...clean,createdAt:s.firestoreApi.serverTimestamp()}));}catch(error){error.studyloopOperation='post-write';throw error;} }
 export async function deleteCloudPost(id) { const s = await getServices(); return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db, 'posts', String(id))); }
 export async function uploadAsset(file, path) {
   const s=await getServices();const ref=s.storageApi.ref(s.storage,path);const contentType=String(file.type||'').split(';')[0].trim().toLowerCase();
   const emit=(status,progress=0)=>document.dispatchEvent(new CustomEvent('studyloop-upload-progress',{detail:{id:path,name:file.name||'Upload',status,progress}}));
   const task=s.storageApi.uploadBytesResumable(ref,file,{contentType,customMetadata:{ownerUid:s.auth.currentUser?.uid||'',uploadedAt:new Date().toISOString(),scanStatus:'unverified'}});
   emit('uploading',0);
-  await new Promise((resolve,reject)=>task.on('state_changed',snapshot=>emit('uploading',snapshot.totalBytes?Math.round(snapshot.bytesTransferred/snapshot.totalBytes*100):0),error=>{emit('error',0);reject(error);},()=>{emit('complete',100);resolve();}));
+  await new Promise((resolve,reject)=>task.on('state_changed',snapshot=>emit('uploading',snapshot.totalBytes?Math.round(snapshot.bytesTransferred/snapshot.totalBytes*100):0),error=>{emit('error',0);error.studyloopOperation='upload';reject(error);},()=>{emit('complete',100);resolve();}));
   return s.storageApi.getDownloadURL(task.snapshot.ref);
 }
 export async function deleteUploadedAsset(url) { const s=await getServices();if(!url)return;return s.storageApi.deleteObject(s.storageApi.ref(s.storage,url)); }
