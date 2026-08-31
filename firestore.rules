@@ -134,7 +134,7 @@ service cloud.firestore {
     }
 
     match /publicProfiles/{userId} {
-      allow read: if activeUser();
+      allow read: if activeUser() || admin();
       allow create, update: if activeUser() && request.auth.uid == userId
         && request.resource.data.keys().hasOnly(['username','course','yearLevel','bio','photoURL','updatedAt'])
         && validText(request.resource.data.username, 80)
@@ -160,7 +160,7 @@ service cloud.firestore {
       // The current client uses one collection subscription for the feed.
       // Keep this authenticated until the feed is migrated to per-channel
       // queries; anonymous enumeration is still prevented.
-      allow read: if activeUser();
+      allow read: if activeUser() || admin();
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','createdAt'])
@@ -194,7 +194,7 @@ service cloud.firestore {
     }
 
     match /channels/{channelId} {
-      allow read: if activeUser();
+      allow read: if activeUser() || admin();
       allow create: if activeUser() && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.keys().hasOnly(['name','course','sub','access','desc','icon','cls','members','ownerId','createdAt','imageURL'])
         && validText(request.resource.data.name, 80)
