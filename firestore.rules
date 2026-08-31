@@ -5,35 +5,15 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function admin() { return signedIn() && request.auth.token.admin == true; }
     function validText(field, max) { return field is string && field.size() <= max; }
-    function validStoredFile(file) {
-      return file is map
-        && file.keys().hasOnly(['name','meta','type','url'])
-        && validText(file.name, 180)
-        && validText(file.meta, 80)
-        && validText(file.type, 100)
-        && validText(file.url, 2048);
-    }
-    function validStoredFileAt(files, index) {
-      return files.size() <= index || validStoredFile(files[index]);
-    }
     function validStoredFiles(files) {
-      return files is list && files.size() <= 10
-        && validStoredFileAt(files, 0) && validStoredFileAt(files, 1)
-        && validStoredFileAt(files, 2) && validStoredFileAt(files, 3)
-        && validStoredFileAt(files, 4) && validStoredFileAt(files, 5)
-        && validStoredFileAt(files, 6) && validStoredFileAt(files, 7)
-        && validStoredFileAt(files, 8) && validStoredFileAt(files, 9);
-    }
-    function validStoredUrlAt(urls, index) {
-      return urls.size() <= index || validText(urls[index], 2048);
+      // Firebase Rules has a strict 1,000-expression budget for the complete
+      // post + rate-limit transaction. Per-index validation of ten items
+      // exhausts that budget. Storage Rules remain the authority for actual
+      // upload type and size; this document rule bounds the attachment list.
+      return files is list && files.size() <= 10;
     }
     function validStoredUrls(urls) {
-      return urls is list && urls.size() <= 10
-        && validStoredUrlAt(urls, 0) && validStoredUrlAt(urls, 1)
-        && validStoredUrlAt(urls, 2) && validStoredUrlAt(urls, 3)
-        && validStoredUrlAt(urls, 4) && validStoredUrlAt(urls, 5)
-        && validStoredUrlAt(urls, 6) && validStoredUrlAt(urls, 7)
-        && validStoredUrlAt(urls, 8) && validStoredUrlAt(urls, 9);
+      return urls is list && urls.size() <= 10;
     }
     function ownsUser(userId) { return signedIn() && request.auth.uid == userId; }
     function activeUser() {
