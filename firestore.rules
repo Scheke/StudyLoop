@@ -89,6 +89,38 @@ service cloud.firestore {
           ))
         );
     }
+    function downloadByteLimit() {
+      return paidPlan()
+        ? (get(/databases/$(database)/documents/entitlements/$(request.auth.uid)).data.plan == 'Student+'
+          ? 2147483648
+          : 4294967296)
+        : 0;
+    }
+    function downloadBytesConsumed() {
+      let path = ratePath('downloadBytes');
+      let after = getAfter(path).data;
+      return paidPlan()
+        && after.uid == request.auth.uid
+        && after.action == 'downloadBytes'
+        && after.updatedAt == request.time
+        && after.count <= downloadByteLimit()
+        && (
+          (!exists(path)
+            && after.count > 0
+            && after.count <= 209715200
+            && after.windowStartedAt == request.time)
+          || (exists(path) && (
+            (request.time < get(path).data.windowStartedAt + duration.value(30, 'd')
+              && after.windowStartedAt == get(path).data.windowStartedAt
+              && after.count > get(path).data.count
+              && after.count - get(path).data.count <= 209715200)
+            || (request.time >= get(path).data.windowStartedAt + duration.value(30, 'd')
+              && after.windowStartedAt == request.time
+              && after.count > 0
+              && after.count <= 209715200)
+          ))
+        );
+    }
 
     match /users/{userId} {
       allow read: if (signedIn() && request.auth.uid == userId) || admin();
@@ -463,6 +495,8 @@ service cloud.firestore {
         request.auth.uid + '_post',
         request.auth.uid + '_comment',
         request.auth.uid + '_download',
+        request.auth.uid + '_downloadBytes',
+        request.auth.uid + '_downloadBurst',
         request.auth.uid + '_friendRequest',
         request.auth.uid + '_report'
       ];
@@ -472,12 +506,14 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.count is int
         && request.resource.data.count > 0
-        && request.resource.data.action in ['message','post','comment','download','friendRequest','report']
+        && request.resource.data.action in ['message','post','comment','download','downloadBytes','downloadBurst','friendRequest','report']
         && (
           (request.resource.data.action == 'message' && rateConsumed('message', 20, duration.value(60, 's')))
           || (request.resource.data.action == 'post' && rateConsumed('post', 5, duration.value(60, 's')))
           || (request.resource.data.action == 'comment' && rateConsumed('comment', 15, duration.value(60, 's')))
-          || (request.resource.data.action == 'download' && rateConsumed('download', 10, duration.value(24, 'h')))
+          || (request.resource.data.action == 'download' && !paidPlan() && rateConsumed('download', 30, duration.value(24, 'h')))
+          || (request.resource.data.action == 'downloadBytes' && downloadBytesConsumed())
+          || (request.resource.data.action == 'downloadBurst' && rateConsumed('downloadBurst', 8, duration.value(60, 's')))
           || (request.resource.data.action == 'friendRequest' && rateConsumed('friendRequest', 10, duration.value(3600, 's')))
           || (request.resource.data.action == 'report' && rateConsumed('report', 5, duration.value(3600, 's')))
         );

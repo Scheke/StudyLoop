@@ -1,5 +1,5 @@
 import './styles.css';
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, getDailyDownloadUsage, claimDailyDownload, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, updateCloudChannel, deleteCloudChannel, getChannelMemberCount, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments, observeCommentCounts, observeChannelNotificationPreferences, setChannelNotifications } from './firebase.js';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, observeAuth, observePosts, getUserProfile, getAccountEntitlement, getDownloadUsage, claimSuccessfulDownload, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, updateCloudChannel, deleteCloudChannel, getChannelMemberCount, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments, observeCommentCounts, observeChannelNotificationPreferences, setChannelNotifications } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -283,7 +283,8 @@ function userFacingError(error, fallback='Something went wrong.') {
     'auth/too-many-requests':'Too many attempts. Try again later.',
     'auth/network-request-failed':'Check your internet connection and try again.',
     'app/rate-limited':'You’re doing that too quickly. Please wait and try again.',
-    'app/download-limit':'Free accounts can download up to 10 files every 24 hours. Your allowance will reset automatically.',
+    'app/download-limit':'You have reached your plan’s download allowance. It will reset automatically.',
+    'app/download-throttled':'Too many downloads were started at once. Wait a minute and try again.',
     'app/not-authorized':'Sign in again before trying this action.',
     'account/deactivated':'This account has been deactivated.'
   };
@@ -298,20 +299,27 @@ async function loadAccountEntitlement(userId) {
   try { state.subscriptionPlan=await getAccountEntitlement(userId); }
   catch (error) { console.warn('Unable to load account entitlement.',error);state.subscriptionPlan='Free'; }
 }
-async function loadDailyDownloadUsage(userId) {
-  try { state.downloadsUsedToday=await getDailyDownloadUsage(userId); }
-  catch (error) { console.warn('Unable to load download usage.',error);state.downloadsUsedToday=0; }
+async function loadDownloadUsage(userId) {
+  try { const usage=await getDownloadUsage(userId,state.subscriptionPlan);state.downloadsUsedToday=usage.count;state.downloadsUsedMB=usage.bytes/(1024*1024); }
+  catch (error) { console.warn('Unable to load download usage.',error);state.downloadsUsedToday=0;state.downloadsUsedMB=0; }
+}
+async function cacheMediaBlob(url,blob) {
+  if(!('caches' in window))return;const cache=await caches.open(`studyloop-media-${state.userId||'signed-out'}-v1`);await cache.put(url,new Response(blob,{headers:{'Content-Type':blob.type||'application/octet-stream'}}));
+}
+async function fetchMediaAsset(url,cacheNetwork=true) {
+  const cacheName=`studyloop-media-${state.userId||'signed-out'}-v1`;
+  if('caches' in window){const cache=await caches.open(cacheName);const cached=await cache.match(url);if(cached)return {blob:await cached.blob(),fromNetwork:false};const response=await fetch(url);if(!response.ok)throw new Error('The file could not be downloaded.');const blob=await response.blob();if(cacheNetwork)cacheMediaBlob(url,blob).catch(()=>{});return {blob,fromNetwork:true};}
+  const response=await fetch(url);if(!response.ok)throw new Error('The file could not be downloaded.');return {blob:await response.blob(),fromNetwork:true};
 }
 async function downloadAsset(url,name='studyloop-download') {
   const fetchUrl=assetUrl(url);if(!fetchUrl){notify('This file is unavailable.');return;}
   try{
-    if(state.subscriptionPlan==='Free'){state.downloadsUsedToday=await getDailyDownloadUsage(state.userId);if(state.downloadsUsedToday>=10)throw Object.assign(new Error('Download allowance reached.'),{code:'app/download-limit'});}
-    const response=await fetch(fetchUrl);if(!response.ok)throw new Error('The file could not be downloaded.');
-    const blob=await response.blob();
-    if(state.subscriptionPlan==='Free')state.downloadsUsedToday=await claimDailyDownload();
+    const current=await getDownloadUsage(state.userId,state.subscriptionPlan);if(state.subscriptionPlan==='Free'&&current.count>=30)throw Object.assign(new Error('Download allowance reached.'),{code:'app/download-limit'});
+    const {blob,fromNetwork}=await fetchMediaAsset(fetchUrl,false);
+    if(fromNetwork){const usage=await claimSuccessfulDownload(blob.size,state.subscriptionPlan);state.downloadsUsedToday=usage.count;state.downloadsUsedMB=usage.bytes/(1024*1024);await cacheMediaBlob(fetchUrl,blob).catch(()=>{});}
     const objectUrl=URL.createObjectURL(blob);
     const link=document.createElement('a');link.href=objectUrl;link.download=String(name||'studyloop-download');document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(objectUrl),1000);
-    notify(state.subscriptionPlan==='Free'?`Download started · ${Math.max(0,10-state.downloadsUsedToday)} remaining today`:'Download started');
+    notify(fromNetwork&&state.subscriptionPlan==='Free'?`Download started · ${Math.max(0,30-state.downloadsUsedToday)} remaining today`:fromNetwork?'Download started':'Downloaded from your device cache');
     if(state.page==='pricing')render();
   }catch(error){notify(userFacingError(error,'Unable to download this file.'));}
 }
@@ -319,12 +327,8 @@ async function loadPostImage(target) {
   const fetchUrl=assetUrl(target?.dataset.loadImage);if(!fetchUrl)return;
   target.disabled=true;target.classList.add('is-loading');
   try{
-    if(state.subscriptionPlan==='Free'){state.downloadsUsedToday=await getDailyDownloadUsage(state.userId);if(state.downloadsUsedToday>=10)throw Object.assign(new Error('Download allowance reached.'),{code:'app/download-limit'});}
-    const response=await fetch(fetchUrl);if(!response.ok)throw new Error('The image could not be loaded.');
-    const objectUrl=URL.createObjectURL(await response.blob());
-    if(state.subscriptionPlan==='Free')state.downloadsUsedToday=await claimDailyDownload();
+    const {blob}=await fetchMediaAsset(fetchUrl);const objectUrl=URL.createObjectURL(blob);
     loadedPostImages.set(fetchUrl,objectUrl);const image=document.createElement('img');image.className=target.dataset.imageClass||'post-image';image.src=objectUrl;image.alt=target.dataset.imageAlt||'Post image';image.dataset.action='zoom-image';target.replaceWith(image);
-    if(state.subscriptionPlan==='Free')notify(`Image loaded · ${Math.max(0,10-state.downloadsUsedToday)} downloads remaining`);
   }catch(error){target.disabled=false;target.classList.remove('is-loading');notify(userFacingError(error,'Unable to load this image.'));}
 }
 async function waitForUserProfile(userId) {
@@ -857,7 +861,7 @@ function createChannelModal() {
 
 function pricingPage() {
   const plans=[
-    { name:'Free', price:0, storage:'100 MB', downloads:'10 files/day', voice:'2 min', saved:'7', private:'No', addons:'No', tone:'free' },
+    { name:'Free', price:0, storage:'100 MB', downloads:'30 files/day', voice:'2 min', saved:'7', private:'No', addons:'No', tone:'free' },
     { name:'Student+', price:40, storage:'2 GB', downloads:'2 GB/month', voice:'10 min', saved:'Unlimited', private:'Yes', addons:'Yes', tone:'student' },
     { name:'Power', price:80, storage:'4 GB', downloads:'4 GB/month', voice:'10 min', saved:'Unlimited', private:'Yes', addons:'Yes', tone:'power' },
   ];
@@ -866,14 +870,14 @@ function pricingPage() {
   const recurringTotal=active.price+(hasAddons?state.storageAddons*20:0);
   const storageTotalMB=(Number.parseFloat(active.storage)||0)*(active.storage.includes('GB')?1024:1)+(state.storageAddons*1024);
   const storageLeftMB=Math.max(0,storageTotalMB-(Number(state.storageUsedMB)||0));
-  const downloadTotalMB=Number.parseFloat(active.downloads)||0;
+  const downloadTotalMB=(Number.parseFloat(active.downloads)||0)*(active.downloads.includes('GB')?1024:1);
   const downloadsLeftMB=Math.max(0,downloadTotalMB-(Number(state.downloadsUsedMB)||0));
   const formatMB=value=>value>=1024?`${(value/1024).toFixed(value%1024?1:0)} GB`:`${Math.round(value)} MB`;
   const savedLimit=active.saved==='Unlimited'?null:Number(active.saved);
   const voiceLeft=active.name==='Free'?Math.max(0,10-voiceQuotaCount()):null;
-  const freeDownloadsLeft=Math.max(0,10-state.downloadsUsedToday);
+  const freeDownloadsLeft=Math.max(0,30-state.downloadsUsedToday);
   const downloadsUsage=active.name==='Free'
-    ? `<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${freeDownloadsLeft} files</strong><small>of 10 every 24 hours</small><div class="usage-meter"><i style="width:${freeDownloadsLeft*10}%"></i></div></div>`
+    ? `<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${freeDownloadsLeft} files</strong><small>of 30 every 24 hours</small><div class="usage-meter"><i style="width:${freeDownloadsLeft/30*100}%"></i></div></div>`
     : `<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${formatMB(downloadsLeftMB)}</strong><small>this month</small><div class="usage-meter"><i style="width:${downloadTotalMB?Math.min(100,(downloadsLeftMB/downloadTotalMB)*100):0}%"></i></div></div>`;
   const usageCards=`<section class="usage-summary card"><div class="usage-summary-head"><div><span class="pricing-eyebrow">YOUR USAGE</span><h3>What you have left</h3></div><span class="usage-plan">${active.name} plan</span></div><div class="usage-grid"><div class="usage-item"><span class="usage-label">Storage left</span><strong>${formatMB(storageLeftMB)}</strong><small>of ${formatMB(storageTotalMB)}</small><div class="usage-meter"><i style="width:${storageTotalMB?Math.min(100,(storageLeftMB/storageTotalMB)*100):0}%"></i></div></div>${downloadsUsage}<div class="usage-item"><span class="usage-label">Uploads today</span><strong>Unlimited</strong><small>within your storage allowance</small></div><div class="usage-item"><span class="usage-label">Upload cap</span><strong>200 MB</strong><small>maximum per file</small></div><div class="usage-item"><span class="usage-label">Voice notes left</span><strong>${voiceLeft===null?'Unlimited':voiceLeft}</strong><small>${voiceLeft===null?'no daily limit':'of 10 today'}</small></div><div class="usage-item"><span class="usage-label">Saved posts</span><strong>${savedLimit===null?'Unlimited':Math.max(0,savedLimit-state.saved.size)}</strong><small>${savedLimit===null?'no limit':`of ${savedLimit} remaining`}</small></div><div class="usage-item"><span class="usage-label">Channels joined</span><strong>${state.memberChannelIds.size||state.joined.size}</strong><small>active communities</small></div></div></section>`;
   const rows=[['Total upload storage','storage'],['Media download allowance','downloads'],['Max individual file','200 MB'],['Voice note length','voice'],['Saved posts','saved'],['Create public channels','Yes'],['Create private channels','private'],['Join private channels','Yes'],['Storage add-ons','addons']];
@@ -901,12 +905,12 @@ function render() {
 }
 
 function usageSummaryHtml(){
-  const limits={Free:{storage:100,downloads:100,saved:7},'Student+':{storage:5120,downloads:5120,saved:null},Power:{storage:10240,downloads:10240,saved:null}};
+  const limits={Free:{storage:100,downloads:0,saved:7},'Student+':{storage:2048,downloads:2048,saved:null},Power:{storage:4096,downloads:4096,saved:null}};
   const limit=limits[state.subscriptionPlan]||limits.Free;
   const storageTotal=limit.storage+state.storageAddons*1024, storageLeft=Math.max(0,storageTotal-(state.storageUsedMB||0));
   const downloadsLeft=Math.max(0,limit.downloads-(state.downloadsUsedMB||0));
   const fmt=n=>n>=1024?`${(n/1024).toFixed(n%1024?1:0)} GB`:`${Math.round(n)} MB`;
-  const downloadUsage=state.subscriptionPlan==='Free'?`<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${Math.max(0,10-state.downloadsUsedToday)} files</strong><small>of 10 every 24 hours</small><div class="usage-meter"><i style="width:${Math.max(0,10-state.downloadsUsedToday)*10}%"></i></div></div>`:`<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${fmt(downloadsLeft)}</strong><small>this month</small><div class="usage-meter"><i style="width:${limit.downloads?downloadsLeft/limit.downloads*100:0}%"></i></div></div>`;
+  const downloadUsage=state.subscriptionPlan==='Free'?`<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${Math.max(0,30-state.downloadsUsedToday)} files</strong><small>of 30 every 24 hours</small><div class="usage-meter"><i style="width:${Math.max(0,30-state.downloadsUsedToday)/30*100}%"></i></div></div>`:`<div class="usage-item"><span class="usage-label">Downloads left</span><strong>${fmt(downloadsLeft)}</strong><small>this month</small><div class="usage-meter"><i style="width:${limit.downloads?downloadsLeft/limit.downloads*100:0}%"></i></div></div>`;
   return `<section class="usage-summary card"><div class="usage-summary-head"><div><span class="pricing-eyebrow">YOUR USAGE</span><h3>What you have left</h3></div><span class="usage-plan">${escapeHtml(state.subscriptionPlan)} plan</span></div><div class="usage-grid"><div class="usage-item"><span class="usage-label">Storage left</span><strong>${fmt(storageLeft)}</strong><small>of ${fmt(storageTotal)}</small><div class="usage-meter"><i style="width:${storageTotal?storageLeft/storageTotal*100:0}%"></i></div></div>${downloadUsage}<div class="usage-item"><span class="usage-label">Uploads today</span><strong>Unlimited</strong><small>within your storage allowance</small></div><div class="usage-item"><span class="usage-label">Upload cap</span><strong>200 MB</strong><small>maximum per file</small></div><div class="usage-item"><span class="usage-label">Saved posts</span><strong>${limit.saved===null?'Unlimited':Math.max(0,limit.saved-state.saved.size)}</strong><small>${limit.saved===null?'no limit':'remaining'}</small></div><div class="usage-item"><span class="usage-label">Channels joined</span><strong>${state.memberChannelIds.size||state.joined.size}</strong><small>active communities</small></div></div></section>`;
 }
 
@@ -1266,7 +1270,7 @@ function resetPrivateState() {
   abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
   loadedPostImages.forEach(url=>URL.revokeObjectURL(url));loadedPostImages.clear();
-  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;chats.splice(0);people.splice(0);notifications.splice(0);
+  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;chats.splice(0);people.splice(0);notifications.splice(0);
 }
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
@@ -1328,7 +1332,7 @@ async function connectFirebase() {
       currentAuthUid=user.uid;state.isAuthenticated=true; state.isGuest=false; state.userId=user.uid; state.userEmail=user.email||'';
       try { const profile=await waitForUserProfile(user.uid);if(!profile){notify('Your account profile could not be loaded. Please sign in again.');await signOutUser();return;}if(profile.deactivated){await signOutUser();notify('This account has been deactivated.');return;}applyProfile(profile);if(!state.apkPromptDismissed&&localStorage.getItem('studyloop_apk_prompt_dismissed')==='1'){state.apkPromptDismissed=true;setInstallPromptDismissed(user.uid,true).catch(error=>console.warn('Unable to migrate install prompt preference.',error));} } catch (error) { console.warn('Unable to load profile', error);await signOutUser();return; }
       await loadAccountEntitlement(user.uid);
-      await loadDailyDownloadUsage(user.uid);
+      await loadDownloadUsage(user.uid);
       if (!stopCommentCounts) stopCommentCounts=await observeCommentCounts(counts=>{commentCounts.clear();Object.entries(counts).forEach(([postId,count])=>commentCounts.set(String(postId),count));posts.forEach(post=>{post.comments=commentCounts.get(String(post.id))||0;});render();},error=>console.warn('Unable to load comment counts',error));
       if (!stopCloudUsers) stopCloudUsers=await observeUsers(users => { people.splice(0,people.length,...users.filter(profile=>profile.id!==state.userId).map(profile=>({ id:profile.id, initials:initials(profile.username||'Student'), name:profile.username||'Student', info:[profile.course,profile.yearLevel].filter(Boolean).join(' · '), status:profile.bio||'', photoURL:profile.photoURL||'' }))); friendRequests.splice(0);discoverPeople.splice(0,discoverPeople.length,...people);notifications.splice(0);syncChats(); render(); }, error=>console.warn('Unable to load users',error));
       if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();if(state.page==='messages'&&state.chatOpen)subscribeActiveMessages();render();},error=>console.warn('Unable to load message notifications',error));
