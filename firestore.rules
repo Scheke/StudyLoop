@@ -34,12 +34,6 @@ service cloud.firestore {
         || get(/databases/$(database)/documents/channels/$(channelId)).data.ownerId == request.auth.uid
       );
     }
-    function canReadChannel(channelId) {
-      return activeUser() && channelExists(channelId) && (
-        get(/databases/$(database)/documents/channels/$(channelId)).data.access == 'Public'
-        || isChannelMember(channelId)
-      );
-    }
     function validMessageParticipants(data) {
       return data.participants is list && (
         (data.participants.size() == 1
@@ -222,7 +216,7 @@ service cloud.firestore {
           && validText(request.resource.data.desc, 500)
           && (!('imageURL' in request.resource.data) || validText(request.resource.data.imageURL, 2048))
           && request.resource.data.access in ['Public','Private']
-          && (request.resource.data.access == 'Public' || paidPlan()))
+          && (request.resource.data.access == 'Public' || resource.data.access == 'Private' || paidPlan()))
         || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
           && request.resource.data.members is int
           && request.resource.data.members >= 0

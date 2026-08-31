@@ -12,7 +12,7 @@ service firebase.storage {
     // Storage paths do not include a channel ID, so exact membership checks
     // require a future path migration.  Until then, every read is at least
     // authenticated; public anonymous downloads are not permitted.
-    function canReadPost(postId) { return activeRequester(); }
+    function canReadPost() { return activeRequester(); }
     function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }
     function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm']; }
     function safeDocument() { return request.resource.contentType in ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain']; }
@@ -27,6 +27,15 @@ service firebase.storage {
       allow delete: if owns(userId);
       allow update: if false;
     }
+    match /users/{userId}/channels/{channelId}/{fileName} {
+      allow read: if activeRequester();
+      allow create: if owns(userId)
+        && request.resource.size <= 10 * 1024 * 1024
+        && safeImage()
+        && fileName.matches('[A-Za-z0-9._-]{1,160}');
+      allow delete: if owns(userId);
+      allow update: if false;
+    }
     match /users/{userId}/saved/{fileName} {
       allow read: if activeRequester();
       allow create: if owns(userId)
@@ -37,7 +46,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/posts/{postId}/{fileName} {
-      allow read: if canReadPost(postId)
+      allow read: if canReadPost()
         && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
@@ -56,7 +65,7 @@ service firebase.storage {
       allow update: if false;
     }
     match /users/{userId}/comments/{postId}/{fileName} {
-      allow read: if canReadPost(postId);
+      allow read: if canReadPost();
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
         && (safeImage() || safeAudio())
