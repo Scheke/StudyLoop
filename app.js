@@ -1114,20 +1114,22 @@ document.addEventListener('change',async e=>{
   }
   if(e.target.id!=='file-upload')return;
   e.stopImmediatePropagation();
-  const file=e.target.files?.[0]; if(!file)return;
-  const allowed=ALLOWED_UPLOAD_TYPES.has(baseMimeType(file.type));
-  if(!allowed){notify('Choose an image, voice note, PDF, Office document, or text file. Videos, HTML, and executable files are not allowed.');e.target.value='';return;}
-  if(file.size>200*1024*1024){notify('Files must be 200 MB or smaller.');e.target.value='';return;}
-  const size=file.size<1024*1024?`${Math.max(1,Math.round(file.size/1024))} KB`:`${(file.size/(1024*1024)).toFixed(1)} MB`;
+  const files=[...(e.target.files||[])]; if(!files.length)return;
+  if(files.length>10){notify('Choose up to 10 files at a time.');e.target.value='';return;}
+  if(files.some(file=>!ALLOWED_UPLOAD_TYPES.has(baseMimeType(file.type)))){notify('Choose images, voice notes, PDFs, Office documents, or text files. Videos, HTML, and executable files are not allowed.');e.target.value='';return;}
+  if(files.some(file=>file.size>200*1024*1024)){notify('Each file must be 200 MB or smaller.');e.target.value='';return;}
   try {
     const destination=e.target.dataset.destination||'saved';
     const peer=destination==='chat'?people[state.activeChat-1]:null;
     const participants=peer?[state.userId,peer.id]:[state.userId];
-    const storedName=`${Date.now()}-${safeStorageName(file)}`;
     const folder=peer?'messages':'saved';
-    const url=await uploadAsset(file,`users/${state.userId}/${folder}/${storedName}`);
-    await saveCloudMessage({conversationId:peer?[state.userId,peer.id].sort().join('_'):`saved_${state.userId}`,participants,senderId:state.userId,type:'attachment',text:peer?'Shared a file':'Saved a file',file:{name:file.name,meta:size,type:file.type,url},...(file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})});
-    notify(peer?'File sent':'File saved to Saved Messages');
+    for(const [index,file] of files.entries()){
+      const storedName=`${Date.now()}-${index}-${safeStorageName(file)}`;
+      const size=file.size<1024*1024?`${Math.max(1,Math.round(file.size/1024))} KB`:`${(file.size/(1024*1024)).toFixed(1)} MB`;
+      const url=await uploadAsset(file,`users/${state.userId}/${folder}/${storedName}`);
+      await saveCloudMessage({conversationId:peer?[state.userId,peer.id].sort().join('_'):`saved_${state.userId}`,participants,senderId:state.userId,type:'attachment',text:peer?'Shared a file':'Saved a file',file:{name:file.name,meta:size,type:file.type,url},...(file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})});
+    }
+    notify(peer?`${files.length} file${files.length===1?'':'s'} sent`:`${files.length} file${files.length===1?'':'s'} saved to Saved Messages`);
   } catch(error) { notify(userFacingError(error,'Unable to save this file.')); }
   finally { e.target.value='';delete e.target.dataset.destination; }
 },true);
