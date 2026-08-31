@@ -5,6 +5,25 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function admin() { return signedIn() && request.auth.token.admin == true; }
     function validText(field, max) { return field is string && field.size() <= max; }
+    function validStoredFile(file) {
+      return file is map
+        && file.keys().hasOnly(['name','meta','type','url'])
+        && validText(file.name, 180)
+        && validText(file.meta, 80)
+        && validText(file.type, 100)
+        && validText(file.url, 2048);
+    }
+    function validStoredFileAt(files, index) {
+      return files.size() <= index || validStoredFile(files[index]);
+    }
+    function validStoredFiles(files) {
+      return files is list && files.size() <= 10
+        && validStoredFileAt(files, 0) && validStoredFileAt(files, 1)
+        && validStoredFileAt(files, 2) && validStoredFileAt(files, 3)
+        && validStoredFileAt(files, 4) && validStoredFileAt(files, 5)
+        && validStoredFileAt(files, 6) && validStoredFileAt(files, 7)
+        && validStoredFileAt(files, 8) && validStoredFileAt(files, 9);
+    }
     function ownsUser(userId) { return signedIn() && request.auth.uid == userId; }
     function activeUser() {
       return signedIn()
@@ -156,7 +175,7 @@ service cloud.firestore {
       allow read: if activeUser() || admin();
       allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
         && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','createdAt'])
+        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','files','createdAt'])
         && request.resource.data.channelId is string
         && channelExists(request.resource.data.channelId)
         && isChannelMember(request.resource.data.channelId)
@@ -170,9 +189,10 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && (!('imageURL' in request.resource.data) || request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
         && (!('audioURL' in request.resource.data) || request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
+        && (!('files' in request.resource.data) || validStoredFiles(request.resource.data.files))
         && (!('audioDuration' in request.resource.data) || (request.resource.data.audioDuration is int && request.resource.data.audioDuration >= 0 && request.resource.data.audioDuration <= 600));
       allow update: if activeUser() && resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','createdAt'])
+        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','audioURL','audioDuration','file','files','createdAt'])
         && request.resource.data.authorId == resource.data.authorId
         && request.resource.data.channelId == resource.data.channelId
         && isChannelMember(resource.data.channelId)
@@ -335,12 +355,13 @@ service cloud.firestore {
         ))
         && (!('post' in request.resource.data) || (
           request.resource.data.post is map
-          && request.resource.data.post.keys().hasOnly(['id','course','author','authorId','text','imageURL','audioURL','file'])
+          && request.resource.data.post.keys().hasOnly(['id','course','author','authorId','text','imageURL','audioURL','file','files'])
           && validText(request.resource.data.post.id, 160)
           && validText(request.resource.data.post.course, 120)
           && validText(request.resource.data.post.author, 80)
           && validText(request.resource.data.post.authorId, 160)
           && validText(request.resource.data.post.text, 4000)
+          && (!('files' in request.resource.data.post) || validStoredFiles(request.resource.data.post.files))
         ));
       allow read: if activeUser() && request.auth.uid in resource.data.participants;
       allow delete: if (activeUser() && resource.data.senderId == request.auth.uid && resource.data.seenBy.toSet().size() == 1) || admin();
