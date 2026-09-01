@@ -9,10 +9,36 @@ service firebase.storage {
           || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
-    // Storage paths do not include a channel ID, so exact membership checks
-    // require a future path migration.  Until then, every read is at least
-    // authenticated; public anonymous downloads are not permitted.
-    function canReadPost() { return activeRequester(); }
+    function isChannelMember(channelId) {
+      return activeRequester() && (
+        firestore.exists(/databases/(default)/documents/memberships/$(request.auth.uid + '_' + channelId))
+        || firestore.get(/databases/(default)/documents/channels/$(channelId)).data.ownerId == request.auth.uid
+      );
+    }
+    function isConversationParticipant(conversationId) {
+      return activeRequester()
+        && firestore.exists(/databases/(default)/documents/conversations/$(conversationId))
+        && request.auth.uid in firestore.get(/databases/(default)/documents/conversations/$(conversationId)).data.participants;
+    }
+    function paidPlan(userId) {
+      return firestore.exists(/databases/(default)/documents/entitlements/$(userId))
+        && firestore.get(/databases/(default)/documents/entitlements/$(userId)).data.plan in ['Student+','Power']
+        && firestore.get(/databases/(default)/documents/entitlements/$(userId)).data.expiresAt > request.time;
+    }
+    function storageLimit(userId) {
+      return paidPlan(userId)
+        ? (firestore.get(/databases/(default)/documents/entitlements/$(userId)).data.plan == 'Student+'
+          ? 2 * 1024 * 1024 * 1024
+          : 4 * 1024 * 1024 * 1024)
+        : 100 * 1024 * 1024;
+    }
+    function storageUsed(userId) {
+      return firestore.exists(/databases/(default)/documents/usage/$(userId))
+        && 'storageBytes' in firestore.get(/databases/(default)/documents/usage/$(userId)).data
+        ? firestore.get(/databases/(default)/documents/usage/$(userId)).data.storageBytes
+        : 0;
+    }
+    function withinQuota(userId) { return storageUsed(userId) + request.resource.size <= storageLimit(userId); }
     function safeImage() { return request.resource.contentType in ['image/jpeg','image/png','image/webp']; }
     function safeAudio() { return request.resource.contentType in ['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm']; }
     function safeDocument() { return request.resource.contentType in ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain']; }
@@ -22,6 +48,7 @@ service firebase.storage {
       allow read: if activeRequester();
       allow create: if owns(userId)
         && request.resource.size <= 10 * 1024 * 1024
+        && withinQuota(userId)
         && safeImage()
         && fileName.matches('[A-Za-z0-9._-]{1,120}');
       allow delete: if owns(userId);
@@ -31,25 +58,32 @@ service firebase.storage {
       allow read: if activeRequester();
       allow create: if owns(userId)
         && request.resource.size <= 10 * 1024 * 1024
+        && withinQuota(userId)
         && safeImage()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
       allow update: if false;
     }
     match /users/{userId}/saved/{fileName} {
-      allow read: if activeRequester();
+      allow read: if owns(userId);
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
       allow update: if false;
     }
     match /users/{userId}/posts/{postId}/{fileName} {
-      allow read: if canReadPost()
+      // Preserve older post attachments without making them public: access is
+      // derived from the referenced post's channel membership.
+      allow read: if activeRequester()
+        && firestore.exists(/databases/(default)/documents/posts/$(postId))
+        && isChannelMember(firestore.get(/databases/(default)/documents/posts/$(postId)).data.channelId)
         && resource.contentType in ['image/jpeg','image/png','image/webp','audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/webm','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/plain'];
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
@@ -59,16 +93,53 @@ service firebase.storage {
       allow read: if owns(userId);
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
         && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
       allow update: if false;
     }
     match /users/{userId}/comments/{postId}/{fileName} {
-      allow read: if canReadPost();
+      allow read: if activeRequester()
+        && firestore.exists(/databases/(default)/documents/posts/$(postId))
+        && isChannelMember(firestore.get(/databases/(default)/documents/posts/$(postId)).data.channelId);
       allow create: if owns(userId)
         && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
         && (safeImage() || safeAudio())
+        && fileName.matches('[A-Za-z0-9._-]{1,160}');
+      allow delete: if owns(userId);
+      allow update: if false;
+    }
+
+    match /channels/{channelId}/posts/{postId}/{userId}/{fileName} {
+      allow read: if isChannelMember(channelId);
+      allow create: if owns(userId) && isChannelMember(channelId)
+        && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
+        && safeStudyFile()
+        && fileName.matches('[A-Za-z0-9._-]{1,160}');
+      allow delete: if owns(userId);
+      allow update: if false;
+    }
+
+    match /channels/{channelId}/comments/{postId}/{commentId}/{userId}/{fileName} {
+      allow read: if isChannelMember(channelId);
+      allow create: if owns(userId) && isChannelMember(channelId)
+        && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
+        && (safeImage() || safeAudio())
+        && fileName.matches('[A-Za-z0-9._-]{1,160}');
+      allow delete: if owns(userId);
+      allow update: if false;
+    }
+
+    match /conversations/{conversationId}/{userId}/{fileName} {
+      allow read: if isConversationParticipant(conversationId);
+      allow create: if owns(userId) && isConversationParticipant(conversationId)
+        && request.resource.size <= 200 * 1024 * 1024
+        && withinQuota(userId)
+        && safeStudyFile()
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
       allow update: if false;

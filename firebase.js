@@ -3,6 +3,7 @@ import * as authApi from 'firebase/auth';
 import * as appCheckApi from 'firebase/app-check';
 import * as firestoreApi from 'firebase/firestore';
 import * as storageApi from 'firebase/storage';
+import * as functionsApi from 'firebase/functions';
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -22,7 +23,7 @@ async function getServices() {
   if(appCheckSiteKey)appCheckApi.initializeAppCheck(app,{provider:new appCheckApi.ReCaptchaEnterpriseProvider(appCheckSiteKey),isTokenAutoRefreshEnabled:true});
   const auth = authApi.getAuth(app);
   await authApi.setPersistence(auth, authApi.browserLocalPersistence);
-  services = { authApi, appCheckApi, firestoreApi, storageApi, auth, db: firestoreApi.getFirestore(app), storage: storageApi.getStorage(app) };
+  services = { authApi, appCheckApi, firestoreApi, storageApi, functionsApi, auth, db: firestoreApi.getFirestore(app), storage: storageApi.getStorage(app), functions:functionsApi.getFunctions(app,'us-central1') };
   return services;
 }
 
@@ -73,7 +74,8 @@ export async function signUp(username, email, password) {
 export async function signIn(email, password) { const s = await getServices(); const user=(await s.authApi.signInWithEmailAndPassword(s.auth, String(email||'').trim().toLowerCase(), password)).user;const profile=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'users',user.uid));if(profile.exists()&&profile.data().deactivated===true){await s.authApi.signOut(s.auth);const error=new Error('Account deactivated');error.code='account/deactivated';throw error;}return user; }
 export async function signOutUser() { const s = await getServices(); return s.authApi.signOut(s.auth); }
 export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
-export async function deactivateUser(uid) { const s = await getServices(); return s.firestoreApi.setDoc(s.firestoreApi.doc(s.db, 'users', uid), { deactivated: true, updatedAt: s.firestoreApi.serverTimestamp() }, { merge: true }); }
+async function callBackend(name,data={}) { const s=await getServices();const result=await s.functionsApi.httpsCallable(s.functions,name)(data);return result.data; }
+export async function deactivateUser() { return callBackend('deactivateAccount'); }
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
 export async function setInstallPromptDismissed(uid, dismissed=true) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'users',uid),{apkPromptDismissed:Boolean(dismissed),updatedAt:s.firestoreApi.serverTimestamp()}); }
 export async function getAccountEntitlement(uid) { const s=await getServices();const snapshot=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'entitlements',uid));if(!snapshot.exists())return 'Free';const entitlement=snapshot.data();const expiresAt=entitlement.expiresAt?.toMillis?.()||0;return ['Student+','Power'].includes(entitlement.plan)&&expiresAt>Date.now()?entitlement.plan:'Free'; }
@@ -107,10 +109,11 @@ export async function observeChannelNotificationPreferences(uid,onChange,onError
 export async function setChannelNotifications(uid,channelId,muted) { const s=await getServices(); const ref=s.firestoreApi.doc(s.db,'users',uid,'channelSettings',String(channelId)); return muted?s.firestoreApi.setDoc(ref,{channelId:String(channelId),muted:true,updatedAt:s.firestoreApi.serverTimestamp()}):s.firestoreApi.deleteDoc(ref); }
 export async function setMembership(uid, channelId, joined) { const s = await getServices();const ref=s.firestoreApi.doc(s.db,'memberships',`${uid}_${channelId}`);const channelRef=s.firestoreApi.doc(s.db,'channels',String(channelId));return s.firestoreApi.runTransaction(s.db,async transaction=>{const [membership,channel]=await Promise.all([transaction.get(ref),transaction.get(channelRef)]);if(!channel.exists())throw Object.assign(new Error('Channel not found.'),{code:'app/not-found'});if(joined&&!membership.exists()){transaction.set(ref,{uid,channelId:String(channelId),joinedAt:s.firestoreApi.serverTimestamp()});transaction.update(channelRef,{members:Math.max(0,Number(channel.data().members)||0)+1});}if(!joined&&membership.exists()){transaction.delete(ref);transaction.update(channelRef,{members:Math.max(0,(Number(channel.data().members)||0)-1)});}}); }
 export async function getChannelMemberCount(channelId) { const s=await getServices();const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'memberships'),s.firestoreApi.where('channelId','==',String(channelId)));const snapshot=await s.firestoreApi.getDocs(query);return snapshot.docs.map(item=>item.data()); }
-export async function deleteCloudChannel(channelId) { const s=await getServices();return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db,'channels',String(channelId))); }
+export async function deleteCloudChannel(channelId) { return callBackend('deleteChannel',{channelId:String(channelId)}); }
 export async function observeSaved(uid, onChange, onError) { const s = await getServices(); return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db, 'users', uid, 'saved'), snapshot => onChange(snapshot.docs.map(doc => doc.id)), onError); }
-export async function setSavedPost(uid, postId, saved) { const s = await getServices(); const ref=s.firestoreApi.doc(s.db, 'users', uid, 'saved', String(postId)); return saved ? s.firestoreApi.setDoc(ref,{postId:String(postId),savedAt:s.firestoreApi.serverTimestamp()}) : s.firestoreApi.deleteDoc(ref); }
-export async function saveCloudMessage(message) { const s=await getServices();const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'messages'));await s.firestoreApi.setDoc(ref,{...message,seenBy:[message.senderId],createdAt:s.firestoreApi.serverTimestamp()});return ref; }
+export async function setSavedPost(uid, postId, saved) { return callBackend('setSavedPost',{postId:String(postId),saved:Boolean(saved)}); }
+export async function saveCloudMessage(message) { const result=await callBackend('createMessage',message);return {id:result.id}; }
+export async function ensureConversation(participants) { return callBackend('ensureConversation',{participants}); }
 export async function deleteCloudMessage(messageId) { const s = await getServices(); return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db, 'messages', String(messageId))); }
 export async function updateCloudMessage(messageId, text) { const s = await getServices(); return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'messages',String(messageId)),{text,editedAt:s.firestoreApi.serverTimestamp()}); }
 export async function observeMessages(conversationId, onChange, onError) { const s = await getServices(); const query=s.firestoreApi.query(s.firestoreApi.collection(s.db, 'messages'), s.firestoreApi.where('conversationId','==',conversationId)); return s.firestoreApi.onSnapshot(query, snapshot => onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))), onError); }
@@ -122,19 +125,25 @@ export async function sendFriendRequest(senderId,receiverId) { return rateLimite
 export async function respondToFriendRequest(requestId,status) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'friendRequests',requestId),{status,updatedAt:s.firestoreApi.serverTimestamp()}); }
 export async function observeBlocks(userId,onChange,onError) { const s=await getServices();const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'blocks'),s.firestoreApi.where('blockerId','==',userId));return s.firestoreApi.onSnapshot(query,snapshot=>onChange(snapshot.docs.map(doc=>doc.data().blockedId)),onError); }
 export async function setUserBlocked(blockerId,blockedId,blocked) { const s=await getServices();const ref=s.firestoreApi.doc(s.db,'blocks',`${blockerId}_${blockedId}`);return blocked?s.firestoreApi.setDoc(ref,{blockerId,blockedId,createdAt:s.firestoreApi.serverTimestamp()}):s.firestoreApi.deleteDoc(ref); }
-export async function saveCloudComment(postId, comment) { const s=await getServices();const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'posts',String(postId),'comments'));await s.firestoreApi.setDoc(ref,{...comment,createdAt:s.firestoreApi.serverTimestamp()});return ref; }
-export async function deleteCloudComment(postId, commentId) { const s=await getServices();return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db,'posts',String(postId),'comments',String(commentId))); }
+export async function saveCloudComment(postId, comment) { const result=await callBackend('createComment',{postId:String(postId),...comment});return {id:result.id}; }
+export async function deleteCloudComment(postId, commentId) { return callBackend('deleteComment',{postId:String(postId),commentId:String(commentId)}); }
 export async function observeCloudComments(postId,onChange,onError) { const s=await getServices();return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db,'posts',String(postId),'comments'),snapshot=>onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>(a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))),onError); }
-export async function observeCommentCounts(onChange,onError) { const s=await getServices();const query=s.firestoreApi.collectionGroup(s.db,'comments');return s.firestoreApi.onSnapshot(query,snapshot=>{const counts={};snapshot.docs.forEach(item=>{const postId=item.ref.parent.parent?.id;if(postId)counts[postId]=(counts[postId]||0)+1;});onChange(counts);},onError); }
+export async function observeNotifications(uid,onChange,onError) { const s=await getServices();const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'users',uid,'notifications'),s.firestoreApi.orderBy('createdAt','desc'),s.firestoreApi.limit(50));return s.firestoreApi.onSnapshot(query,snapshot=>onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()}))),onError); }
+export async function markNotificationsRead(uid,ids) { const s=await getServices();const batch=s.firestoreApi.writeBatch(s.db);for(const id of ids.slice(0,50))batch.update(s.firestoreApi.doc(s.db,'users',uid,'notifications',String(id)),{read:true,readAt:s.firestoreApi.serverTimestamp()});return batch.commit(); }
 export async function report(type, targetId, reason, userId) { return rateLimitedWrite('report',(transaction,s)=>{const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'reports'));transaction.set(ref,{type,targetId,reason,userId,createdAt:s.firestoreApi.serverTimestamp()});return ref;}); }
-export async function saveCloudPost(post, userId) { const clean=Object.fromEntries(Object.entries({...post}).filter(([,value])=>value!==undefined));try{return await rateLimitedWrite('post',(transaction,s)=>transaction.set(s.firestoreApi.doc(s.db,'posts',String(post.id)),{...clean,createdAt:s.firestoreApi.serverTimestamp()}));}catch(error){error.studyloopOperation='post-write';throw error;} }
-export async function deleteCloudPost(id) { const s = await getServices(); return s.firestoreApi.deleteDoc(s.firestoreApi.doc(s.db, 'posts', String(id))); }
+export async function saveCloudPost(post) { const clean=Object.fromEntries(Object.entries({...post}).filter(([,value])=>value!==undefined));try{return await callBackend('createPost',clean);}catch(error){error.studyloopOperation='post-write';throw error;} }
+export async function updateCloudPost(postId,text) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'posts',String(postId)),{text:String(text||'').trim()}); }
+export async function deleteCloudPost(id) { return callBackend('deletePost',{postId:String(id)}); }
+export async function getStorageUsage(uid) { const s=await getServices();const snapshot=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'usage',uid));return Math.max(0,Number(snapshot.data()?.storageBytes)||0); }
+export async function observeStorageUsage(uid,onChange,onError) { const s=await getServices();return s.firestoreApi.onSnapshot(s.firestoreApi.doc(s.db,'usage',uid),snapshot=>onChange(Math.max(0,Number(snapshot.data()?.storageBytes)||0)),onError); }
+export async function observeVoiceUsage(uid,onChange,onError) { const s=await getServices();const day=new Date().toISOString().slice(0,10);return s.firestoreApi.onSnapshot(s.firestoreApi.doc(s.db,'voiceUsage',`${uid}_${day}`),snapshot=>onChange(Math.max(0,Number(snapshot.data()?.count)||0)),onError); }
 export async function uploadAsset(file, path) {
   const s=await getServices();const ref=s.storageApi.ref(s.storage,path);const contentType=String(file.type||'').split(';')[0].trim().toLowerCase();
   const emit=(status,progress=0)=>document.dispatchEvent(new CustomEvent('studyloop-upload-progress',{detail:{id:path,name:file.name||'Upload',status,progress}}));
   const task=s.storageApi.uploadBytesResumable(ref,file,{contentType,customMetadata:{ownerUid:s.auth.currentUser?.uid||'',uploadedAt:new Date().toISOString(),scanStatus:'unverified'}});
   emit('uploading',0);
   await new Promise((resolve,reject)=>task.on('state_changed',snapshot=>emit('uploading',snapshot.totalBytes?Math.round(snapshot.bytesTransferred/snapshot.totalBytes*100):0),error=>{emit('error',0);error.studyloopOperation='upload';reject(error);},()=>{emit('complete',100);resolve();}));
-  return s.storageApi.getDownloadURL(task.snapshot.ref);
+  return /^(channels|conversations)\//.test(path)?task.snapshot.ref.fullPath:s.storageApi.getDownloadURL(task.snapshot.ref);
 }
 export async function deleteUploadedAsset(url) { const s=await getServices();if(!url)return;return s.storageApi.deleteObject(s.storageApi.ref(s.storage,url)); }
+export async function getAssetBlob(reference) { const s=await getServices();if(!reference)throw new Error('Attachment unavailable.');return s.storageApi.getBlob(s.storageApi.ref(s.storage,reference)); }

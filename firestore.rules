@@ -197,27 +197,7 @@ service cloud.firestore {
       // membership check here as the authorization boundary; UI filtering is
       // not treated as access control.
       allow read: if admin() || (activeUser() && isChannelMember(resource.data.channelId));
-      allow create: if activeUser() && rateConsumed('post', 5, duration.value(60, 's'))
-        && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
-        && request.resource.data.channelId is string
-        && channelExists(request.resource.data.channelId)
-        && isChannelMember(request.resource.data.channelId)
-        && validText(request.resource.data.author, 80)
-        && request.resource.data.author == profileUsername()
-        && validText(request.resource.data.initials, 4)
-        && validText(request.resource.data.course, 120)
-        && (request.resource.data.text == null || validText(request.resource.data.text, 4000))
-        && request.resource.data.comments == 0
-        && request.resource.data.id == postId
-        && request.resource.data.createdAt == request.time
-        && (!('imageURL' in request.resource.data) || request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
-        && (!('images' in request.resource.data) || validStoredUrls(request.resource.data.images))
-        && (!('imagePreviews' in request.resource.data) || validStoredPreviews(request.resource.data.imagePreviews))
-        && (!('audioURL' in request.resource.data) || request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
-        && (!('files' in request.resource.data) || validStoredFiles(request.resource.data.files))
-        && (!('images' in request.resource.data) || !('files' in request.resource.data) || request.resource.data.images.size() + request.resource.data.files.size() <= 10)
-        && (!('audioDuration' in request.resource.data) || (request.resource.data.audioDuration is int && request.resource.data.audioDuration >= 0 && request.resource.data.audioDuration <= 600));
+      allow create: if false;
       allow update: if activeUser() && resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
         && request.resource.data.authorId == resource.data.authorId
@@ -230,7 +210,7 @@ service cloud.firestore {
         && validText(request.resource.data.author, 80)
         && validText(request.resource.data.course, 120)
         && validText(request.resource.data.text, 4000);
-      allow delete: if (activeUser() && resource.data.authorId == request.auth.uid) || admin();
+      allow delete: if false;
     }
 
     match /channels/{channelId} {
@@ -274,33 +254,14 @@ service cloud.firestore {
               && !existsAfter(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
               && request.resource.data.members == resource.data.members - 1)))
       );
-      allow delete: if activeUser() && resource.data.ownerId == request.auth.uid && resource.data.members <= 1;
+      allow delete: if false;
     }
 
     match /posts/{postId}/comments/{commentId} {
-      allow read: if activeUser();
-      allow create: if activeUser()
+      allow read: if admin() || (activeUser()
         && exists(/databases/$(database)/documents/posts/$(postId))
-        && request.resource.data.authorId == request.auth.uid
-        && request.resource.data.keys().hasOnly(['authorId','author','authorPhotoURL','text','imageURL','audioURL','audioDuration','parentId','createdAt'])
-        && validText(request.resource.data.author, 80)
-        && request.resource.data.author == profileUsername()
-        && validText(request.resource.data.text, 2000)
-        && validText(request.resource.data.authorPhotoURL, 2048)
-        && (request.resource.data.imageURL == null || validText(request.resource.data.imageURL, 2048))
-        && (request.resource.data.audioURL == null || validText(request.resource.data.audioURL, 2048))
-        && (!('audioDuration' in request.resource.data) || (
-          request.resource.data.audioDuration is int
-          && request.resource.data.audioDuration >= 0
-          && request.resource.data.audioDuration <= 600
-        ))
-        && request.resource.data.createdAt == request.time
-        && (request.resource.data.parentId == null || (
-          request.resource.data.parentId is string
-          && exists(/databases/$(database)/documents/posts/$(postId)/comments/$(request.resource.data.parentId))
-          && get(/databases/$(database)/documents/posts/$(postId)/comments/$(request.resource.data.parentId)).data.parentId == null
-        ));
-      allow delete: if (activeUser() && resource.data.authorId == request.auth.uid) || admin();
+        && isChannelMember(get(/databases/$(database)/documents/posts/$(postId)).data.channelId));
+      allow create, delete: if false;
       allow update: if false;
     }
 
@@ -335,64 +296,11 @@ service cloud.firestore {
 
     match /users/{userId}/saved/{postId} {
       allow read: if activeUser() && ownsUser(userId);
-      allow create: if activeUser() && ownsUser(userId)
-        && request.resource.data.keys().hasOnly(['postId','savedAt'])
-        && request.resource.data.postId == postId
-        && request.resource.data.savedAt == request.time;
-      allow delete: if activeUser() && ownsUser(userId);
-      allow update: if false;
+      allow write: if false;
     }
 
     match /messages/{messageId} {
-      allow create: if activeUser()
-        && request.auth.uid == request.resource.data.senderId
-        && request.resource.data.keys().hasOnly(['conversationId','participants','senderId','text','type','post','postId','file','replyTo','seenBy','playedBy','createdAt'])
-        && validMessageParticipants(request.resource.data)
-        && messagingAllowed(request.resource.data)
-        && validText(request.resource.data.conversationId, 160)
-        && (request.resource.data.text == null || validText(request.resource.data.text, 4000))
-        && request.resource.data.type in ['text','postLink','savedPost','attachment']
-        && request.resource.data.seenBy is list
-        && request.resource.data.seenBy.size() == 1
-        && request.resource.data.seenBy[0] == request.auth.uid
-        && (!('playedBy' in request.resource.data) || (
-          request.resource.data.type == 'attachment'
-          && request.resource.data.file.type.matches('^audio/.*')
-          && request.resource.data.playedBy is list
-          && request.resource.data.playedBy.size() == 1
-          && request.resource.data.playedBy[0] == request.auth.uid
-        ))
-        && request.resource.data.createdAt == request.time
-        && (!('postId' in request.resource.data) || request.resource.data.postId is string)
-        && (!('replyTo' in request.resource.data) || (
-          request.resource.data.replyTo is map
-          && request.resource.data.replyTo.keys().hasOnly(['id','sender','text'])
-          && validText(request.resource.data.replyTo.id, 160)
-          && validText(request.resource.data.replyTo.sender, 80)
-          && validText(request.resource.data.replyTo.text, 300)
-        ))
-        && (!('file' in request.resource.data) || (
-          request.resource.data.file is map
-          && request.resource.data.file.keys().hasOnly(['name','meta','type','url','duration'])
-          && validText(request.resource.data.file.name, 180)
-          && validText(request.resource.data.file.meta, 80)
-          && validText(request.resource.data.file.type, 100)
-          && validText(request.resource.data.file.url, 2048)
-          && (!('duration' in request.resource.data.file) || (request.resource.data.file.duration is number && request.resource.data.file.duration >= 0 && request.resource.data.file.duration <= 600))
-        ))
-        && (!('post' in request.resource.data) || (
-          request.resource.data.post is map
-          && request.resource.data.post.keys().hasOnly(['id','course','author','authorId','text','imageURL','images','imagePreviews','audioURL','file','files'])
-          && validText(request.resource.data.post.id, 160)
-          && validText(request.resource.data.post.course, 120)
-          && validText(request.resource.data.post.author, 80)
-          && validText(request.resource.data.post.authorId, 160)
-          && validText(request.resource.data.post.text, 4000)
-          && (!('images' in request.resource.data.post) || validStoredUrls(request.resource.data.post.images))
-          && (!('imagePreviews' in request.resource.data.post) || validStoredPreviews(request.resource.data.post.imagePreviews))
-          && (!('files' in request.resource.data.post) || validStoredFiles(request.resource.data.post.files))
-          && (!('images' in request.resource.data.post) || !('files' in request.resource.data.post) || request.resource.data.post.images.size() + request.resource.data.post.files.size() <= 10)
-        ));
+      allow create: if false;
       allow read: if activeUser() && request.auth.uid in resource.data.participants;
       allow delete: if (activeUser() && resource.data.senderId == request.auth.uid && resource.data.seenBy.toSet().size() == 1) || admin();
       allow update: if activeUser() && request.auth.uid in resource.data.participants && (
@@ -417,6 +325,34 @@ service cloud.firestore {
           && (!('playedBy' in resource.data) || request.resource.data.playedBy.toSet().hasAll(resource.data.playedBy.toSet()))
           && request.resource.data.playedBy.size() <= resource.data.participants.size())
       );
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if activeUser() && request.auth.uid in resource.data.participants;
+      allow write: if false;
+    }
+
+    match /users/{userId}/notifications/{notificationId} {
+      allow read: if activeUser() && request.auth.uid == userId;
+      allow update: if activeUser() && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read','readAt'])
+        && request.resource.data.read == true
+        && request.resource.data.readAt == request.time;
+      allow create, delete: if false;
+    }
+
+    match /usage/{userId} {
+      allow read: if (activeUser() && request.auth.uid == userId) || admin();
+      allow write: if false;
+    }
+
+    match /voiceUsage/{usageId} {
+      allow read: if activeUser() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /storageObjects/{objectId} {
+      allow read, write: if false;
     }
 
     match /friendRequests/{requestId} {
@@ -492,6 +428,11 @@ service cloud.firestore {
       allow read, write: if admin();
     }
 
+    match /adminAuditLogs/{logId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
     match /rateLimits/{rateId} {
       allow read: if activeUser() && rateId in [
         request.auth.uid + '_message',
@@ -509,12 +450,9 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.count is int
         && request.resource.data.count > 0
-        && request.resource.data.action in ['message','post','comment','download','downloadBytes','downloadBurst','friendRequest','report']
+        && request.resource.data.action in ['download','downloadBytes','downloadBurst','friendRequest','report']
         && (
-          (request.resource.data.action == 'message' && rateConsumed('message', 20, duration.value(60, 's')))
-          || (request.resource.data.action == 'post' && rateConsumed('post', 5, duration.value(60, 's')))
-          || (request.resource.data.action == 'comment' && rateConsumed('comment', 15, duration.value(60, 's')))
-          || (request.resource.data.action == 'download' && !paidPlan() && rateConsumed('download', 30, duration.value(24, 'h')))
+          (request.resource.data.action == 'download' && !paidPlan() && rateConsumed('download', 30, duration.value(24, 'h')))
           || (request.resource.data.action == 'downloadBytes' && downloadBytesConsumed())
           || (request.resource.data.action == 'downloadBurst' && rateConsumed('downloadBurst', 8, duration.value(60, 's')))
           || (request.resource.data.action == 'friendRequest' && rateConsumed('friendRequest', 10, duration.value(3600, 's')))
