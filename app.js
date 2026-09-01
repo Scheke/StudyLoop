@@ -1288,6 +1288,10 @@ async function subscribeActiveMessages() {
       const mapped=[];
       let previousDay='';
       messages.forEach((message,index)=>{
+        // Voice notes are intentionally not part of peer-to-peer DMs.  Hide
+        // any legacy audio attachment rather than leaving an unusable player
+        // in the conversation.  Saved Messages retains its own voice notes.
+        if(state.activeChat!==0&&message.type==='attachment'&&String(message.file?.type||'').startsWith('audio/'))return;
         const dayLabel=chatDayLabel(message.createdAt);
         if(dayLabel&&dayLabel!==previousDay){mapped.push({type:'date-divider',label:dayLabel});previousDay=dayLabel;}
         if(index===firstUnread)mapped.push({type:'unread-divider'});
