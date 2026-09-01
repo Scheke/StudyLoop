@@ -1,14 +1,14 @@
-const CACHE_NAME = 'studyloop-shell-v6';
+const CACHE_NAME = 'studyloop-shell-v7';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/studyloop-logo.png'];
-const MIGRATE_LEGACY_CLIENTS = CACHE_NAME === 'studyloop-shell-v6';
+const MIGRATE_LEGACY_CLIENTS = CACHE_NAME === 'studyloop-shell-v7';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL))
-      // v6 must replace the legacy all-post listener immediately because the
-      // matching Firestore rule is now membership-scoped. Later cache versions
-      // wait for the in-app "Update now" confirmation instead.
+      // v7 immediately replaces legacy clients that can still display old
+      // technical startup messages. Later cache versions can return to the
+      // in-app "Update now" confirmation flow.
       .then(()=>MIGRATE_LEGACY_CLIENTS?self.skipWaiting():undefined)
   );
 });

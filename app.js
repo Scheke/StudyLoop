@@ -150,6 +150,7 @@ const state = {
   saved: new Set(),
   joined: new Set(),
   memberChannelIds: new Set(),
+  channelsReady: false,
   recordedAudio: null,
   recordedAudioURL: '',
   recordedAudioDuration: 0,
@@ -258,7 +259,17 @@ function applyInboxMessages() {
   }
   if(notifications.length>20)notifications.splice(20);
 }
-function notify(message) { const t=$('#toast'); t.textContent=message; t.classList.add('show'); clearTimeout(notify.timer); notify.timer=setTimeout(()=>t.classList.remove('show'),2200); }
+function safeNotificationMessage(message) {
+  const value=String(message||'').trim();
+  if(!value)return 'StudyLoop could not complete that action. Please try again.';
+  // SDK names, internal error codes and configuration details are useful in
+  // diagnostics, but confusing (and potentially revealing) in the interface.
+  if(/firebase|firestore|(?:auth|storage)\/[a-z-]+|configuration (?:is )?(?:missing|unavailable)|permission-denied/i.test(value)) {
+    return 'StudyLoop could not complete that action. Please try again.';
+  }
+  return value;
+}
+function notify(message) { const t=$('#toast');if(!t)return;t.textContent=safeNotificationMessage(message);t.classList.add('show');clearTimeout(notify.timer);notify.timer=setTimeout(()=>t.classList.remove('show'),2200); }
 function renderUploadProgress() {
   let panel=$('#upload-progress-panel');
   if(!activeUploads.size){panel?.remove();return;}
@@ -302,7 +313,7 @@ function userFacingError(error, fallback='Something went wrong.') {
     'storage/unauthorized':'You do not have permission to access this file.',
     'storage/quota-exceeded':'Storage is temporarily unavailable. Try again later.',
     'auth/too-many-requests':'Too many attempts. Try again later.',
-    'auth/network-request-failed':'Check your internet connection and try again.',
+    'auth/network-request-failed':'Sign-in could not be completed. Please try again.',
     'app/rate-limited':'You’re doing that too quickly. Please wait and try again.',
     'app/download-limit':'You have reached your plan’s download allowance. It will reset automatically.',
     'app/download-throttled':'Too many downloads were started at once. Wait a minute and try again.',
@@ -465,19 +476,20 @@ function homePage() {
   const filtered=posts.filter(p=>canViewPost(p)&&(state.feedFilter==='All'||p.course===state.feedFilter));
   const chips=['All',...channels.map(channel=>channel.name)];
   const friends=people.filter(person=>isAcceptedFriend(person.id));
-  const feedContent=!channels.length?`<div class="card empty channel-empty-state"><div class="channel-icon">${icon('plus')}</div><h2>No channel created yet</h2><p class="muted">Create a channel to start sharing notes, questions, and study resources.</p><button class="primary" data-action="create-channel">Create a channel</button></div>`:filtered.length?filtered.map(postCard).join(''):`<div class="card empty"><div class="channel-icon">${icon('grid')}</div><h2>No posts yet</h2><p class="muted">Join a channel or create one to see study posts here.</p><button class="primary" data-nav="channels">Browse channels</button></div>`;
+  const feedContent=!state.channelsReady?`<div class="card empty" role="status" aria-live="polite"><h2>Preparing your feed</h2><p class="muted">Your joined channels and posts will appear automatically.</p></div>`:!channels.length?`<div class="card empty channel-empty-state"><div class="channel-icon">${icon('plus')}</div><h2>No channel created yet</h2><p class="muted">Create a channel to start sharing notes, questions, and study resources.</p><button class="primary" data-action="create-channel">Create a channel</button></div>`:filtered.length?filtered.map(postCard).join(''):`<div class="card empty"><div class="channel-icon">${icon('grid')}</div><h2>No posts yet</h2><p class="muted">Join a channel or create one to see study posts here.</p><button class="primary" data-nav="channels">Browse channels</button></div>`;
   const joinedChannels=channels.filter((channel,index)=>state.joined.has(index));
   return shell(`<div class="page-grid"><div class="stack">
     <div class="chips">${chips.map(c=>`<button class="chip ${state.feedFilter===c?'active':''}" data-filter="${c}">${c}</button>`).join('')}</div>
     <div class="stack">${feedContent}</div>
   </div><aside class="stack right-rail">
-    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${joinedChannels.slice(0,3).map(raw=>{const index=channels.indexOf(raw);return `<button class="mini-channel mini-channel-link" data-open-channel="${index}" aria-label="Open ${escapeHtml(raw.name)}"><span class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</span><span class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.access||'Public')} channel</span></span>${icon('chevron')}</button>`;}).join('')||'<p class="muted">Join a channel to see its feed here.</p>'}</section>
+    <section class="card section-card"><div class="section-title"><h3>Your channels</h3><button class="link-btn" data-nav="channels">See all</button></div>${!state.channelsReady?'<p class="muted">Loading your channels…</p>':joinedChannels.slice(0,3).map(raw=>{const index=channels.indexOf(raw);return `<button class="mini-channel mini-channel-link" data-open-channel="${index}" aria-label="Open ${escapeHtml(raw.name)}"><span class="channel-icon ${escapeHtml(raw.cls)}">${escapeHtml(raw.icon)}</span><span class="channel-body"><strong>${escapeHtml(raw.name)}</strong><span>${escapeHtml(raw.access||'Public')} channel</span></span>${icon('chevron')}</button>`;}).join('')||'<p class="muted">Join a channel to see its feed here.</p>'}</section>
     <section class="card section-card"><div class="section-title"><h3>Study circle</h3><span class="muted small">${friends.length} friends</span></div>${friends.length?friends.slice(0,3).map((p,i)=>`<div class="mini-channel" data-profile="${people.indexOf(p)}">${avatar(p,['','green','purple'][i])}<div class="channel-body"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.status)}</span></div><button class="action" data-person-chat="${people.indexOf(p)}">${icon('chat')}</button></div>`).join(''):'<p class="muted">Accepted friends will appear here.</p>'}</section>
   </aside></div>`,'Home');
 }
 
 function channelsPage() {
   const list=channels.filter((c,i)=>(state.channelMode==='discover'||state.joined.has(i)||c.ownerId===state.userId)&&c.name.toLowerCase().includes(state.channelSearch.toLowerCase()));
+  if(!state.channelsReady)return shell(`<div class="telegram-directory"><div class="telegram-empty" role="status" aria-live="polite"><h3>Loading channels</h3><p>Your channels will appear automatically.</p></div></div>`,'Channels',false);
   return shell(`<div class="telegram-directory"><div class="directory-tools"><div class="segment"><button class="${state.channelMode==='joined'?'active':''}" data-channel-mode="joined">Joined</button><button class="${state.channelMode==='discover'?'active':''}" data-channel-mode="discover">Discover</button></div><button class="new-channel-button" data-action="create-channel" aria-label="Create channel">${icon('plus')}</button></div><label class="search-box directory-search">${icon('search')}<input id="channel-search" placeholder="Search channels" value="${escapeHtml(state.channelSearch)}" /></label><section class="telegram-channel-list">${list.length?list.map(raw=>{const idx=channels.indexOf(raw),joined=!state.isGuest&&state.joined.has(idx);const preview=raw.desc||raw.sub||`${raw.access||'Public'} study channel`;return `<article class="telegram-channel-row"><button class="channel-row-main" data-open-channel="${idx}">${channelAvatar(raw)}<span class="channel-row-copy"><span class="channel-row-top"><strong>${escapeHtml(raw.name)}</strong><small>${Number(raw.members)||0} members</small></span><span class="channel-row-preview">${escapeHtml(preview)}</span><span class="channel-row-meta">${raw.access==='Private'?icon('bookmark'):icon('users')} ${escapeHtml(raw.access||'Public')}${raw.course?` · ${escapeHtml(raw.course)}`:''}</span></span></button><span class="channel-row-action">${joined?`<button class="row-open" data-open-channel="${idx}" aria-label="Open ${escapeHtml(raw.name)}">${icon('chevron')}</button>`:`<button class="row-join" data-join="${idx}">Join</button>`}</span></article>`}).join(''):`<div class="telegram-empty"><div class="channel-icon">${icon('search')}</div><h3>No channels found</h3><p>Try another search or create a new channel.</p><button class="primary" data-action="create-channel">Create channel</button></div>`}</section></div>`,'Channels',false);
 }
 
@@ -788,7 +800,8 @@ async function startCommentVoiceRecording() {
 
 function channelDetailPage() {
   const channelRaw=channels[state.activeChannel]||channels[0];
-  if(!channelRaw)return shell(`<div class="card empty"><h3>Channel unavailable</h3><p>This channel could not be loaded.</p></div>`,'Channel',false);
+  if(!channelRaw&&!state.channelsReady)return shell(`<div class="card empty" role="status" aria-live="polite"><h3>Loading channel</h3><p>Your channels are being prepared.</p></div>`,'Channel',false);
+  if(!channelRaw)return shell(`<div class="card empty"><h3>Channel unavailable</h3><p>This channel may have been removed, or you may no longer have access.</p></div>`,'Channel',false);
   const channel={...channelRaw,name:escapeHtml(channelRaw.name),sub:escapeHtml(channelRaw.sub),access:escapeHtml(channelRaw.access),icon:escapeHtml(channelRaw.icon),cls:escapeHtml(channelRaw.cls)};
   const joined=!state.isGuest&&state.joined.has(state.activeChannel);
   const channelPosts=posts.filter(post=>(post.channelId===channelRaw.id||post.course===channelRaw.name)&&(channelRaw.access==='Public'||joined)&&(!state.channelMessageSearch||`${post.author||''} ${post.text||''} ${postFiles(post).map(file=>file?.name||'').join(' ')}`.toLowerCase().includes(state.channelMessageSearch.toLowerCase())));
@@ -1289,7 +1302,7 @@ function resetPrivateState() {
   abandonActiveVoiceRecording();
   disconnectUserSubscriptions();
   loadedPostImages.forEach(url=>URL.revokeObjectURL(url));loadedPostImages.clear();
-  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;chats.splice(0);people.splice(0);posts.splice(0);channels.splice(0);notifications.splice(0);
+  currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.channelsReady=false;state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;chats.splice(0);people.splice(0);posts.splice(0);channels.splice(0);notifications.splice(0);
 }
 function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
@@ -1372,7 +1385,7 @@ function scheduleChannelRetry(error) {
 async function subscribeCloudChannels(force=false) {
   if(stopCloudChannels&&!force)return;
   stopCloudChannels?.();stopCloudChannels=undefined;clearTimeout(channelRetryTimer);
-  try{stopCloudChannels=await observeChannels(cloudChannels=>{const normalized=cloudChannels.map(channel=>({icon:channel.icon||'SL',cls:channel.cls||'',access:channel.access||'Public',members:channel.members||0,desc:channel.desc||'',sub:channel.sub||'',...channel}));channels.splice(0,channels.length,...normalized);syncJoinedChannels();render();},scheduleChannelRetry);}catch(error){scheduleChannelRetry(error);}
+  try{stopCloudChannels=await observeChannels(cloudChannels=>{const normalized=cloudChannels.map(channel=>({icon:channel.icon||'SL',cls:channel.cls||'',access:channel.access||'Public',members:channel.members||0,desc:channel.desc||'',sub:channel.sub||'',...channel}));channels.splice(0,channels.length,...normalized);state.channelsReady=true;syncJoinedChannels();render();},scheduleChannelRetry);}catch(error){scheduleChannelRetry(error);}
 }
 async function connectFirebase() {
   try {
@@ -1400,11 +1413,11 @@ async function connectFirebase() {
       if (state.page==='landing') state.page='home';
       render();setTimeout(showApkPrompt,500);
     });
-  } catch (error) { console.warn('Firebase is unavailable', error); }
+  } catch (error) { console.warn('StudyLoop services are temporarily unavailable.', error); }
 }
 
 render();
-// Keep the branded startup screen visible long enough for Firebase auth
+// Keep the branded startup screen visible long enough for persisted auth
 // persistence to restore the session, including on a hard refresh.
 setTimeout(()=>document.querySelector('#startup-splash')?.classList.add('is-ready'),4000);
 connectFirebase();
