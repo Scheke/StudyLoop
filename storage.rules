@@ -9,6 +9,7 @@ service firebase.storage {
           || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
+    function v2Requester() { return activeRequester() && request.auth.token.email_verified == true; }
     function isChannelMember(channelId) {
       return activeRequester() && (
         firestore.exists(/databases/(default)/documents/memberships/$(request.auth.uid + '_' + channelId))
@@ -143,6 +144,77 @@ service firebase.storage {
         && fileName.matches('[A-Za-z0-9._-]{1,160}');
       allow delete: if owns(userId);
       allow update: if false;
+    }
+
+    // StudyLoop v2 upload sessions. A Function declares every immutable path
+    // before the browser is allowed to upload bytes to it.
+    function v2Member(channelId) {
+      return v2Requester()
+        && firestore.exists(/databases/(default)/documents/channels/$(channelId)/members/$(request.auth.uid));
+    }
+    function validUploadSession(uploadSessionId, attachmentId, expectedPath) {
+      return uploadSessionId is string
+        && attachmentId is string
+        && firestore.exists(/databases/(default)/documents/uploadSessions/$(uploadSessionId))
+        && firestore.get(/databases/(default)/documents/uploadSessions/$(uploadSessionId)).data.ownerId == request.auth.uid
+        && firestore.get(/databases/(default)/documents/uploadSessions/$(uploadSessionId)).data.status == 'created'
+        && firestore.get(/databases/(default)/documents/uploadSessions/$(uploadSessionId)).data.expiresAt > request.time
+        && attachmentId in firestore.get(/databases/(default)/documents/uploadSessions/$(uploadSessionId)).data.attachmentIds
+        && expectedPath in firestore.get(/databases/(default)/documents/uploadSessions/$(uploadSessionId)).data.allowedPaths;
+    }
+    function v2SessionAllows(attachmentId, expectedPath) {
+      return v2Requester()
+        && request.resource.metadata.uploadSessionId is string
+        && request.resource.metadata.attachmentId == attachmentId
+        && request.resource.metadata.ownerUid == request.auth.uid
+        && validUploadSession(request.resource.metadata.uploadSessionId, attachmentId, expectedPath);
+    }
+
+    match /profiles/{userId}/avatar/{attachmentId} {
+      allow read: if v2Requester();
+      allow create: if owns(userId) && resource == null
+        && request.resource.size <= 10 * 1024 * 1024
+        && safeImage()
+        && v2SessionAllows(attachmentId, 'profiles/' + userId + '/avatar/' + attachmentId);
+      allow update, delete: if false;
+    }
+
+    match /channels/{channelId}/avatar/{attachmentId} {
+      allow read: if v2Requester();
+      allow create: if v2Member(channelId) && resource == null
+        && request.resource.size <= 10 * 1024 * 1024
+        && safeImage()
+        && v2SessionAllows(attachmentId, 'channels/' + channelId + '/avatar/' + attachmentId);
+      allow update, delete: if false;
+    }
+
+    match /channels/{channelId}/posts/{postId}/{attachmentId} {
+      allow read: if v2Member(channelId);
+      allow create: if v2Member(channelId) && resource == null
+        && request.resource.size <= 200 * 1024 * 1024
+        && safeStudyFile()
+        && v2SessionAllows(attachmentId, 'channels/' + channelId + '/posts/' + postId + '/' + attachmentId);
+      allow update, delete: if false;
+    }
+
+    match /channels/{channelId}/comments/{commentId}/{attachmentId} {
+      allow read: if v2Member(channelId);
+      allow create: if v2Member(channelId) && resource == null
+        && request.resource.size <= 200 * 1024 * 1024
+        && (safeImage() || safeAudio())
+        && v2SessionAllows(attachmentId, 'channels/' + channelId + '/comments/' + commentId + '/' + attachmentId);
+      allow update, delete: if false;
+    }
+
+    match /conversations/{conversationId}/messages/{messageId}/{attachmentId} {
+      allow read: if v2Requester()
+        && firestore.exists(/databases/(default)/documents/conversations/$(conversationId)/members/$(request.auth.uid));
+      allow create: if activeRequester() && resource == null
+        && firestore.exists(/databases/(default)/documents/conversations/$(conversationId)/members/$(request.auth.uid))
+        && request.resource.size <= 200 * 1024 * 1024
+        && (safeImage() || safeDocument())
+        && v2SessionAllows(attachmentId, 'conversations/' + conversationId + '/messages/' + messageId + '/' + attachmentId);
+      allow update, delete: if false;
     }
   }
 }

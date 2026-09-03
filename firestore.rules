@@ -25,6 +25,9 @@ service cloud.firestore {
         && (!('deactivated' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
           || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
+    function verifiedActiveUser() {
+      return activeUser() && request.auth.token.email_verified == true;
+    }
     function profileUsername() {
       // The private account profile is the canonical source used to populate
       // the composer. Public profile replication can lag or be absent on
@@ -459,6 +462,74 @@ service cloud.firestore {
           || (request.resource.data.action == 'report' && rateConsumed('report', 5, duration.value(3600, 's')))
         );
       allow delete: if false;
+    }
+
+    // StudyLoop v2: nested canonical resources. All writes are performed by
+    // trusted Cloud Functions; the browser receives realtime, least-privilege
+    // reads only.
+    match /channels/{channelId}/members/{userId} {
+      allow read: if verifiedActiveUser() && exists(/databases/$(database)/documents/channels/$(channelId)/members/$(request.auth.uid));
+      allow write: if false;
+    }
+
+    match /channels/{channelId}/posts/{postId} {
+      allow read: if verifiedActiveUser()
+        && resource.data.status == 'ready'
+        && exists(/databases/$(database)/documents/channels/$(channelId)/members/$(request.auth.uid));
+      allow write: if false;
+    }
+
+    match /channels/{channelId}/posts/{postId}/comments/{commentId} {
+      allow read: if verifiedActiveUser()
+        && resource.data.status == 'ready'
+        && exists(/databases/$(database)/documents/channels/$(channelId)/members/$(request.auth.uid));
+      allow write: if false;
+    }
+
+    match /conversations/{conversationId}/members/{userId} {
+      allow read: if verifiedActiveUser() && userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /conversations/{conversationId}/messages/{messageId} {
+      allow read: if verifiedActiveUser()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId)/members/$(request.auth.uid));
+      allow write: if false;
+    }
+
+    match /users/{userId}/savedPosts/{postId} {
+      allow read: if verifiedActiveUser() && ownsUser(userId);
+      allow write: if false;
+    }
+
+    match /users/{userId}/blocks/{blockedUserId} {
+      allow read: if verifiedActiveUser() && ownsUser(userId);
+      allow write: if false;
+    }
+
+    match /users/{userId}/usage/{usageId} {
+      allow read: if verifiedActiveUser() && ownsUser(userId);
+      allow write: if false;
+    }
+
+    match /users/{userId}/subscription/{subscriptionId} {
+      allow read: if verifiedActiveUser() && ownsUser(userId);
+      allow write: if false;
+    }
+
+    match /uploadSessions/{sessionId} {
+      allow read: if verifiedActiveUser() && resource.data.ownerId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /downloadGrants/{grantId} {
+      allow read: if verifiedActiveUser() && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /adminAudit/{auditId} {
+      allow read: if admin();
+      allow write: if false;
     }
   }
 }
