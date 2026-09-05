@@ -9,10 +9,11 @@ service firebase.storage {
           || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.deactivated == false);
     }
     function owns(userId) { return activeRequester() && request.auth.uid == userId; }
-    function v2Requester() { return activeRequester() && request.auth.token.email_verified == true; }
+    function v2Requester() { return activeRequester(); }
     function isChannelMember(channelId) {
       return activeRequester() && (
         firestore.exists(/databases/(default)/documents/memberships/$(request.auth.uid + '_' + channelId))
+        || firestore.exists(/databases/(default)/documents/channels/$(channelId)/members/$(request.auth.uid))
         || firestore.get(/databases/(default)/documents/channels/$(channelId)).data.ownerId == request.auth.uid
       );
     }
@@ -150,7 +151,7 @@ service firebase.storage {
     // before the browser is allowed to upload bytes to it.
     function v2Member(channelId) {
       return v2Requester()
-        && firestore.exists(/databases/(default)/documents/channels/$(channelId)/members/$(request.auth.uid));
+        && isChannelMember(channelId);
     }
     function validUploadSession(uploadSessionId, attachmentId, expectedPath) {
       return uploadSessionId is string

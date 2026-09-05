@@ -37,7 +37,6 @@ function bool(value, fallback = false) {
 async function requireAccount(request, { admin = false } = {}) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Sign in to continue.');
   if (admin && request.auth.token.admin !== true) throw new HttpsError('permission-denied', 'Administrator access is required.');
-  if (!admin && request.auth.token.email_verified !== true) throw new HttpsError('failed-precondition', 'Verify your email before continuing.');
   const snapshot = await db.doc(`users/${request.auth.uid}`).get();
   if (!snapshot.exists || snapshot.data().deactivated === true) throw new HttpsError('permission-denied', 'This account is unavailable.');
   return { uid: request.auth.uid, profile: snapshot.data(), token: request.auth.token };
@@ -61,8 +60,14 @@ function canonicalDmId(a, b) {
 async function requireChannelMember(channelId, uid, transaction = null) {
   const ref = db.doc(`channels/${channelId}/members/${uid}`);
   const snapshot = transaction ? await transaction.get(ref) : await ref.get();
-  if (!snapshot.exists) throw new HttpsError('permission-denied', 'Join this channel before continuing.');
-  return snapshot.data();
+  if (snapshot.exists) return snapshot.data();
+  const legacyRef = db.doc(`memberships/${uid}_${channelId}`);
+  const legacySnapshot = transaction ? await transaction.get(legacyRef) : await legacyRef.get();
+  if (legacySnapshot.exists) return { uid, role: 'member', legacy: true };
+  const channelRef = db.doc(`channels/${channelId}`);
+  const channelSnapshot = transaction ? await transaction.get(channelRef) : await channelRef.get();
+  if (channelSnapshot.exists && channelSnapshot.data().ownerId === uid) return { uid, role: 'owner', legacy: true };
+  throw new HttpsError('permission-denied', 'Join this channel before continuing.');
 }
 
 async function requireConversationMember(conversationId, uid, transaction = null) {
