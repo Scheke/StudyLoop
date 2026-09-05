@@ -56,6 +56,16 @@ service cloud.firestore {
       return getAfter(/databases/$(database)/documents/channels/$(channelId)).data.access == 'Public'
         || getAfter(/databases/$(database)/documents/channels/$(channelId)).data.visibility == 'public';
     }
+    function nextMemberCount(channelId) {
+      return ('members' in get(/databases/$(database)/documents/channels/$(channelId)).data)
+        ? get(/databases/$(database)/documents/channels/$(channelId)).data.members + 1
+        : 1;
+    }
+    function previousMemberCount(channelId) {
+      return ('members' in get(/databases/$(database)/documents/channels/$(channelId)).data)
+        ? get(/databases/$(database)/documents/channels/$(channelId)).data.members - 1
+        : 0;
+    }
     function validMessageParticipants(data) {
       return data.participants is list && (
         (data.participants.size() == 1
@@ -260,10 +270,10 @@ service cloud.firestore {
           && request.resource.data.members >= 0
           && ((!exists(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
               && existsAfter(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
-              && request.resource.data.members == resource.data.members + 1)
+              && request.resource.data.members == (('members' in resource.data) ? resource.data.members + 1 : 1))
             || (exists(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
               && !existsAfter(/databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId))
-              && request.resource.data.members == resource.data.members - 1)))
+              && request.resource.data.members == (('members' in resource.data) ? resource.data.members - 1 : 0))))
       );
       allow delete: if false;
     }
@@ -292,16 +302,14 @@ service cloud.firestore {
           || getAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.ownerId == request.auth.uid
         )
         && getAfter(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.members
-          == (exists(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
-            ? get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.members + 1
-            : 1);
+          == nextMemberCount(request.resource.data.channelId);
       allow delete: if activeUser() && (
         resource.data.uid == request.auth.uid
         || get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.ownerId == request.auth.uid
       )
         && existsAfter(/databases/$(database)/documents/channels/$(resource.data.channelId))
         && getAfter(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.members
-          == get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.members - 1;
+          == previousMemberCount(resource.data.channelId);
       allow update: if false;
     }
 

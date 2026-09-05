@@ -961,7 +961,7 @@ document.addEventListener('click',e=>{
   if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file,...(source.file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
   const forwardChannel=e.target.closest('[data-forward-channel]');
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
-  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>notify(`Joined ${channel.name}`)).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
+  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>{state.memberChannelIds.add(String(channel.id));syncJoinedChannels();subscribeJoinedPosts(true);render();notify(`Joined ${channel.name}`);}).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
   const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];setMembership(state.userId,channel.id,false).then(()=>{syncJoinedChannels();render();notify(`Left ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
   const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';scrollChannelToLatest=true;render();return;}
   const deleteComment=e.target.closest('[data-delete-comment]');
@@ -1270,7 +1270,7 @@ function resetPrivateState() {
   loadedPostImages.forEach(url=>URL.revokeObjectURL(url));loadedPostImages.clear();
   currentAuthUid='';inboxMessages=[];knownPostIds.clear();state.relations=[];state.blockedUsers=new Set();state.mutedChannels=new Set();state.memberChannelIds=new Set();state.joined=new Set();state.saved=new Set();state.unreadMessageIds=new Set();state.channelsReady=false;state.chatOpen=false;state.activeChat=0;state.subscriptionPlan='Free';state.downloadsUsedToday=0;state.downloadsUsedMB=0;state.storageUsedMB=0;state.voiceUsedToday=0;chats.splice(0);people.splice(0);posts.splice(0);channels.splice(0);notifications.splice(0);
 }
-function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>state.memberChannelIds.has(channel.id)?index:-1).filter(index=>index>=0)); }
+function syncJoinedChannels() { state.joined=new Set(channels.map((channel,index)=>(state.memberChannelIds.has(channel.id)||channel.ownerId===state.userId)?index:-1).filter(index=>index>=0)); }
 async function subscribeActiveMessages() {
   stopActiveMessages?.();
   // Capture the active conversation when subscribing.  Rendering and inbox
@@ -1348,7 +1348,8 @@ function schedulePostRetry(error) {
   postRetryTimer=setTimeout(()=>subscribeJoinedPosts(true),3000);
 }
 async function subscribeJoinedPosts(force=false) {
-  const ids=[...state.memberChannelIds].map(String).filter(Boolean).sort();const key=ids.join('|');
+  const ownerChannelIds=channels.filter(channel=>channel.ownerId===state.userId).map(channel=>String(channel.id));
+  const ids=[...new Set([...state.memberChannelIds].map(String).concat(ownerChannelIds))].filter(Boolean).sort();const key=ids.join('|');
   if(!force&&key===postsSubscriptionKey&&stopCloudPosts)return;
   stopCloudPosts?.();stopCloudPosts=undefined;clearTimeout(postRetryTimer);postsSubscriptionKey=key;awaitingInitialPostSnapshot=true;knownPostIds.clear();
   if(!ids.length){posts.splice(0);resolvePendingDeepLink();render();return;}
