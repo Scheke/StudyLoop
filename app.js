@@ -1292,7 +1292,7 @@ async function subscribeActiveMessages() {
   const conversationId=conversationIdFor(chatIndex);
   if(!conversationId)return;
   try {
-    stopActiveMessages=await observeMessages(conversationId,messages=>{
+    stopActiveMessages=await observeMessages(conversationId,state.userId,messages=>{
       if(state.activeChat!==chatIndex||conversationIdFor(chatIndex)!==conversationId)return;
       const chat=chats[chatIndex];if(!chat)return;
       const timeOf=message=>chatTimestamp(message.createdAt);
@@ -1318,8 +1318,8 @@ async function subscribeActiveMessages() {
       chat.messages=mapped;chat.preview=messages.at(-1)?.text||'Saved item';
       if(state.activeChat!==0)markMessagesSeen(messages,state.userId).catch(error=>console.warn('Unable to mark messages seen.',error));
       render();
-    },error=>console.warn('Unable to load messages',error));
-  } catch(error) { console.warn('Unable to subscribe to messages',error); }
+    },error=>console.warn('observeMessages failed', { code:error?.code||'unknown', message:error?.message||'Unknown error', details:error?.details||null }));
+  } catch(error) { console.warn('observeMessages subscription failed', { code:error?.code||'unknown', message:error?.message||'Unknown error', details:error?.details||null }); }
 }
 
 function installHelpModal() {
@@ -1420,7 +1420,7 @@ async function connectFirebase() {
       if (!stopCloudNotifications) stopCloudNotifications=await observeNotifications(user.uid,items=>{notifications.splice(0,notifications.length,...items);render();},error=>console.warn('Unable to load notifications',error));
       if (!stopStorageUsage) stopStorageUsage=await observeStorageUsage(user.uid,bytes=>{state.storageUsedMB=bytes/(1024*1024);if(state.page==='pricing'||state.page==='settings')render();},error=>console.warn('Unable to load storage usage',error));
       if (!stopVoiceUsage) stopVoiceUsage=await observeVoiceUsage(user.uid,count=>{state.voiceUsedToday=count;render();},error=>console.warn('Unable to load voice usage',error));
-      if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();if(state.page==='messages'&&state.chatOpen)subscribeActiveMessages();render();},error=>console.warn('Unable to load message notifications',error));
+      if (!stopUserMessages) stopUserMessages=await observeUserMessages(user.uid,messages=>{inboxMessages=messages;applyInboxMessages();if(state.page==='messages'&&state.chatOpen)subscribeActiveMessages();render();},error=>console.warn('observeUserMessages failed', { code:error?.code||'unknown', message:error?.message||'Unknown error', details:error?.details||null }));
       if (!stopCloudMemberships) stopCloudMemberships=await observeMemberships(user.uid,ids=>{const next=new Set(ids.map(String));const changed=next.size!==state.memberChannelIds.size||[...next].some(id=>!state.memberChannelIds.has(id));state.memberChannelIds=next;syncJoinedChannels();subscribeJoinedPosts(changed);render();},error=>console.warn('Unable to load memberships',error));
       if (!stopCloudSaved) stopCloudSaved=await observeSaved(user.uid, ids=>{state.saved=new Set(ids);render();}, error=>console.warn('Unable to load saved posts',error));
       if (!stopChannelNotificationPreferences) stopChannelNotificationPreferences=await observeChannelNotificationPreferences(user.uid, ids=>{state.mutedChannels=new Set(ids);render();}, error=>console.warn('Unable to load channel notification preferences',error));
