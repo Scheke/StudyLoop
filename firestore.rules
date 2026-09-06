@@ -356,7 +356,7 @@ service cloud.firestore {
     }
 
     match /voiceUsage/{usageId} {
-      allow read: if activeUser() && resource.data.uid == request.auth.uid;
+      allow read: if activeUser() && usageId.matches(request.auth.uid + '_.*');
       allow write: if false;
     }
 
