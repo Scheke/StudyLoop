@@ -378,7 +378,7 @@ function shell(content,title,actions=true) {
     <aside class="sidebar">
       <div class="brand"><span class="brand-mark">${logo()}</span><span>StudyLoop</span></div>
       <nav class="nav">
-        ${navButton('home','Home','home')}${navButton('channels','Channels','grid')}${navButton('messages','Messages','chat',unreadMessages)}${navButton('friends','Friends','users')}${navButton('saved','Saved','bookmark')}${navButton('pricing','Plans','bookmark')}${navButton('profile','Profile','user')}
+        ${navButton('home','Home','home')}${navButton('channels','Channels','grid')}${navButton('messages','Messages','chat',unreadMessages)}${navButton('friends','Friends','users')}${navButton('saved','Saved','bookmark')}${navButton('pricing','Plans','book')}${navButton('profile','Profile','user')}
       </nav>
       <div class="side-profile" data-nav="profile">${state.isGuest?avatar({initials:'G'}):currentUserAvatar()}<div><strong>${escapeHtml(state.isGuest?'Guest browsing':state.profileName)}</strong><div class="muted small">${escapeHtml(state.isGuest?'Sign in to participate':(state.profileCourse||'Add your course'))}</div></div></div>
     </aside>
