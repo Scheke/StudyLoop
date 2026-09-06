@@ -134,7 +134,22 @@ export async function observeUsers(onChange, onError) { const s = await getServi
 export async function observeMemberships(uid, onChange, onError) { const s = await getServices(); const query=s.firestoreApi.query(s.firestoreApi.collection(s.db, 'memberships'), s.firestoreApi.where('uid','==',uid)); return s.firestoreApi.onSnapshot(query, snapshot => onChange(snapshot.docs.map(doc => doc.data().channelId)), onError); }
 export async function observeChannelNotificationPreferences(uid,onChange,onError) { const s=await getServices(); return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db,'users',uid,'channelSettings'),snapshot=>onChange(snapshot.docs.filter(doc=>doc.data().muted===true).map(doc=>doc.id)),onError); }
 export async function setChannelNotifications(uid,channelId,muted) { const s=await getServices(); const ref=s.firestoreApi.doc(s.db,'users',uid,'channelSettings',String(channelId)); return muted?s.firestoreApi.setDoc(ref,{channelId:String(channelId),muted:true,updatedAt:s.firestoreApi.serverTimestamp()}):s.firestoreApi.deleteDoc(ref); }
-export async function setMembership(uid, channelId, joined) { const s = await getServices();const ref=s.firestoreApi.doc(s.db,'memberships',`${uid}_${channelId}`);const channelRef=s.firestoreApi.doc(s.db,'channels',String(channelId));return s.firestoreApi.runTransaction(s.db,async transaction=>{const [membership,channel]=await Promise.all([transaction.get(ref),transaction.get(channelRef)]);if(!channel.exists())throw Object.assign(new Error('Channel not found.'),{code:'app/not-found'});if(joined&&!membership.exists()){transaction.set(ref,{uid,channelId:String(channelId),joinedAt:s.firestoreApi.serverTimestamp()});transaction.update(channelRef,{members:Math.max(0,Number(channel.data().members)||0)+1});}if(!joined&&membership.exists()){transaction.delete(ref);transaction.update(channelRef,{members:Math.max(0,(Number(channel.data().members)||0)-1)});}}); }
+export async function setMembership(uid, channelId, joined) {
+  const s = await getServices();
+  const membershipRef = s.firestoreApi.doc(
+    s.db,
+    'memberships',
+    `${uid}_${channelId}`
+  );
+  if (joined) {
+    return s.firestoreApi.setDoc(membershipRef, {
+      uid: String(uid),
+      channelId: String(channelId),
+      joinedAt: s.firestoreApi.serverTimestamp()
+    });
+  }
+  return s.firestoreApi.deleteDoc(membershipRef);
+}
 export async function getChannelMemberCount(channelId) { const s=await getServices();const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'memberships'),s.firestoreApi.where('channelId','==',String(channelId)));const snapshot=await s.firestoreApi.getDocs(query);return snapshot.docs.map(item=>item.data()); }
 export async function deleteCloudChannel(channelId) { return callBackend('deleteChannel',{channelId:String(channelId)}); }
 export async function observeSaved(uid, onChange, onError) { const s = await getServices(); return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db, 'users', uid, 'saved'), snapshot => onChange(snapshot.docs.map(doc => doc.id)), onError); }
