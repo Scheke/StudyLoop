@@ -31,20 +31,626 @@ function signatureMatches(contentType,buffer){const type=String(contentType||'')
 
 exports.ensureConversation=onCall({region:REGION},async request=>{const uid=signedIn(request);await activeAccount(uid);const participants=[...new Set((Array.isArray(request.data?.participants)?request.data.participants:[]).map(String))];if(![1,2].includes(participants.length)||!participants.includes(uid))throw new HttpsError('invalid-argument','Conversation participants are invalid.');const conversationId=canonicalConversation(participants);if(participants.length===2){const peer=participants.find(id=>id!==uid);const [a,b,profile]=await Promise.all([db.doc(`blocks/${uid}_${peer}`).get(),db.doc(`blocks/${peer}_${uid}`).get(),db.doc(`publicProfiles/${peer}`).get()]);if(a.exists||b.exists)throw new HttpsError('permission-denied','Messaging is unavailable for this conversation.');if(!profile.exists)throw new HttpsError('not-found','The recipient is unavailable.');}const ref=db.doc(`conversations/${conversationId}`);await db.runTransaction(async transaction=>{const existing=await transaction.get(ref);if(existing.exists&&canonicalConversation(existing.data().participants||[])!==conversationId)throw new HttpsError('permission-denied','Conversation is unavailable.');if(!existing.exists)transaction.create(ref,{participants,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});});return {conversationId};});
 
-exports.createMessage=onCall({region:REGION},async request=>{
-  const uid=signedIn(request);await activeAccount(uid);const input=request.data||{};
-  const participants=[...new Set((Array.isArray(input.participants)?input.participants:[]).map(String))];
-  if(![1,2].includes(participants.length)||!participants.includes(uid)||(participants.length===1&&participants[0]!==uid))throw new HttpsError('invalid-argument','Conversation participants are invalid.');
-  const conversationId=canonicalConversation(participants);if(input.conversationId!==conversationId)throw new HttpsError('invalid-argument','Conversation is invalid.');
-  const type=String(input.type||'text');if(!ALLOWED_TYPES.has(type))throw new HttpsError('invalid-argument','Message type is invalid.');
-  const messageRef=db.collection('messages').doc();const conversationRef=db.doc(`conversations/${conversationId}`);const plan=await planFor(uid);let peer='';
-  if(participants.length===2){peer=participants.find(id=>id!==uid);const [a,b,profile]=await Promise.all([db.doc(`blocks/${uid}_${peer}`).get(),db.doc(`blocks/${peer}_${uid}`).get(),db.doc(`publicProfiles/${peer}`).get()]);if(a.exists||b.exists)throw new HttpsError('permission-denied','Messaging is unavailable for this conversation.');if(!profile.exists)throw new HttpsError('not-found','The recipient is unavailable.');}
-  const file=input.file?cleanFile(input.file):null;const post=input.post?cleanPostSnapshot(input.post):null;if(participants.length===2&&file?.type.startsWith('audio/'))throw new HttpsError('invalid-argument','Voice notes are not available in private messages.');if(file&&!secureRef(file.url,`conversations/${conversationId}/${uid}/`)&&!/^https:\/\/firebasestorage\.googleapis\.com\//i.test(file.url))throw new HttpsError('invalid-argument','The attachment does not belong to this conversation.');const message={conversationId,participants,senderId:uid,text:text(input.text,4000),type,seenBy:[uid],createdAt:FieldValue.serverTimestamp()};
-  if(file)message.file=file;if(post)message.post=post;if(input.postId)message.postId=text(input.postId,160);if(input.replyTo&&typeof input.replyTo==='object')message.replyTo={id:text(input.replyTo.id,160,true),sender:text(input.replyTo.sender,80),text:text(input.replyTo.text,300)};if(file?.type.startsWith('audio/'))message.playedBy=[uid];
-  await db.runTransaction(async transaction=>{const conversation=await transaction.get(conversationRef);if(conversation.exists&&canonicalConversation(conversation.data().participants||[])!==conversationId)throw new HttpsError('permission-denied','Conversation is unavailable.');const rate=await consumeRate(transaction,uid,'message',20,60_000);const voice=await consumeVoice(transaction,uid,messageRef.id,Boolean(file?.type.startsWith('audio/'))&&participants.length===1,plan.name);transaction.set(rate.ref,rate.data);if(voice)transaction.set(voice.ref,voice.data,{merge:true});if(!conversation.exists)transaction.create(conversationRef,{participants,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});else transaction.update(conversationRef,{updatedAt:FieldValue.serverTimestamp()});transaction.create(messageRef,message);});
-  if(peer)await db.doc(`users/${peer}/notifications/${messageRef.id}`).set({type:'message',messageId:messageRef.id,senderId:uid,title:'New message',body:type==='attachment'?'Sent you a file':type==='postLink'?'Shared a post with you':message.text.slice(0,180)||'New message',read:false,createdAt:FieldValue.serverTimestamp()});
-  return {id:messageRef.id};
-});
+exports.createMessage = onCall(
+  { region: REGION },
+  async request => {
+
+    // ==========================================================
+    // AUTH
+    // ==========================================================
+
+    const uid = signedIn(request);
+
+    await activeAccount(uid);
+
+    const input = request.data || {};
+
+
+    // ==========================================================
+    // RESOLVE RECIPIENT / PARTICIPANTS
+    //
+    // Supports BOTH old frontend:
+    //
+    // {
+    //   participants: [uid1, uid2],
+    //   conversationId: "...",
+    //   text: "hello"
+    // }
+    //
+    // AND simplified frontend:
+    //
+    // {
+    //   recipientId: "uid2",
+    //   text: "hello"
+    // }
+    // ==========================================================
+
+    let participants = [];
+
+    if (
+      Array.isArray(input.participants)
+      && input.participants.length > 0
+    ) {
+
+      participants = [
+        ...new Set(
+          input.participants
+            .map(value => String(value || "").trim())
+            .filter(Boolean)
+        )
+      ];
+
+    } else {
+
+      const recipientId = String(
+        input.recipientId
+        || input.receiverId
+        || input.toUid
+        || input.peerId
+        || ""
+      ).trim();
+
+
+      if (!recipientId) {
+        throw new HttpsError(
+          "invalid-argument",
+          "Recipient is missing."
+        );
+      }
+
+
+      participants = [
+        uid,
+        recipientId
+      ];
+    }
+
+
+    // Remove duplicates.
+    participants = [
+      ...new Set(participants)
+    ];
+
+
+    // ==========================================================
+    // VALIDATE PARTICIPANTS
+    // ==========================================================
+
+    if (
+      ![1, 2].includes(participants.length)
+      || !participants.includes(uid)
+    ) {
+
+      throw new HttpsError(
+        "invalid-argument",
+        "Conversation participants are invalid."
+      );
+    }
+
+
+    if (
+      participants.length === 1
+      && participants[0] !== uid
+    ) {
+
+      throw new HttpsError(
+        "invalid-argument",
+        "Saved Messages conversation is invalid."
+      );
+    }
+
+
+    // ==========================================================
+    // SERVER GENERATES THE CONVERSATION ID
+    //
+    // Do NOT require the frontend to calculate this perfectly.
+    // ==========================================================
+
+    const conversationId =
+      canonicalConversation(participants);
+
+
+    // ==========================================================
+    // MESSAGE TYPE
+    // ==========================================================
+
+    const type =
+      String(input.type || "text");
+
+
+    if (!ALLOWED_TYPES.has(type)) {
+
+      throw new HttpsError(
+        "invalid-argument",
+        "Message type is invalid."
+      );
+    }
+
+
+    // ==========================================================
+    // TEXT
+    // ==========================================================
+
+    const messageText =
+      text(input.text, 4000);
+
+
+    if (
+      type === "text"
+      && !String(messageText || "").trim()
+    ) {
+
+      throw new HttpsError(
+        "invalid-argument",
+        "Message cannot be empty."
+      );
+    }
+
+
+    // ==========================================================
+    // PEER / BLOCK CHECK
+    // ==========================================================
+
+    let peer = "";
+
+
+    if (participants.length === 2) {
+
+      peer =
+        participants.find(
+          id => id !== uid
+        );
+
+
+      if (!peer) {
+
+        throw new HttpsError(
+          "invalid-argument",
+          "Recipient is invalid."
+        );
+      }
+
+
+      // Check old top-level block model.
+      const oldBlockFromMe =
+        db.doc(
+          `blocks/${uid}_${peer}`
+        );
+
+      const oldBlockFromPeer =
+        db.doc(
+          `blocks/${peer}_${uid}`
+        );
+
+
+      // Check newer nested block model too.
+      const newBlockFromMe =
+        db.doc(
+          `users/${uid}/blocks/${peer}`
+        );
+
+      const newBlockFromPeer =
+        db.doc(
+          `users/${peer}/blocks/${uid}`
+        );
+
+
+      const [
+        oldA,
+        oldB,
+        newA,
+        newB
+      ] = await Promise.all([
+        oldBlockFromMe.get(),
+        oldBlockFromPeer.get(),
+        newBlockFromMe.get(),
+        newBlockFromPeer.get()
+      ]);
+
+
+      if (
+        oldA.exists
+        || oldB.exists
+        || newA.exists
+        || newB.exists
+      ) {
+
+        throw new HttpsError(
+          "permission-denied",
+          "Messaging is unavailable for this conversation."
+        );
+      }
+
+
+      /*
+       * IMPORTANT:
+       *
+       * Do NOT require publicProfiles/{peer} to exist.
+       *
+       * Older/new accounts may have a valid Firebase account
+       * while public profile replication is missing or delayed.
+       *
+       * That should not prevent basic messaging.
+       */
+    }
+
+
+    // ==========================================================
+    // ATTACHMENT
+    // ==========================================================
+
+    const file =
+      input.file
+        ? cleanFile(input.file)
+        : null;
+
+
+    // ==========================================================
+    // FORWARDED / SHARED POST
+    // ==========================================================
+
+    const post =
+      input.post
+        ? cleanPostSnapshot(input.post)
+        : null;
+
+
+    // ==========================================================
+    // PRIVATE DM VOICE NOTES DISABLED
+    // ==========================================================
+
+    if (
+      participants.length === 2
+      && file
+      && file.type
+      && String(file.type).startsWith("audio/")
+    ) {
+
+      throw new HttpsError(
+        "invalid-argument",
+        "Voice notes are not available in private messages."
+      );
+    }
+
+
+    // ==========================================================
+    // ATTACHMENT OWNERSHIP
+    //
+    // Keep your existing validation for attachments.
+    // It does not affect ordinary text messages.
+    // ==========================================================
+
+    if (file) {
+
+      const validSecureReference =
+        secureRef(
+          file.url,
+          `conversations/${conversationId}/${uid}/`
+        );
+
+
+      const legacyFirebaseStorageUrl =
+        /^https:\/\/firebasestorage\.googleapis\.com\//i
+          .test(String(file.url || ""));
+
+
+      if (
+        !validSecureReference
+        && !legacyFirebaseStorageUrl
+      ) {
+
+        throw new HttpsError(
+          "invalid-argument",
+          "The attachment does not belong to this conversation."
+        );
+      }
+    }
+
+
+    // ==========================================================
+    // REFERENCES
+    // ==========================================================
+
+    const messageRef =
+      db.collection("messages").doc();
+
+
+    const conversationRef =
+      db.doc(
+        `conversations/${conversationId}`
+      );
+
+
+    // ==========================================================
+    // MESSAGE DOCUMENT
+    // ==========================================================
+
+    const message = {
+
+      id: messageRef.id,
+
+      conversationId,
+
+      participants,
+
+      senderId: uid,
+
+      text: messageText,
+
+      type,
+
+      seenBy: [
+        uid
+      ],
+
+      createdAt:
+        FieldValue.serverTimestamp()
+    };
+
+
+    if (peer) {
+      message.recipientId = peer;
+      message.receiverId = peer;
+    }
+
+
+    if (file) {
+      message.file = file;
+    }
+
+
+    if (post) {
+      message.post = post;
+    }
+
+
+    if (input.postId) {
+
+      message.postId =
+        text(
+          input.postId,
+          160
+        );
+    }
+
+
+    if (
+      input.replyTo
+      && typeof input.replyTo === "object"
+    ) {
+
+      message.replyTo = {
+
+        id: text(
+          input.replyTo.id,
+          160,
+          true
+        ),
+
+        sender: text(
+          input.replyTo.sender,
+          80
+        ),
+
+        text: text(
+          input.replyTo.text,
+          300
+        )
+      };
+    }
+
+
+    // ==========================================================
+    // WRITE
+    //
+    // IMPORTANT:
+    // Temporarily remove rate-limit + plan + voice-accounting
+    // from basic DM creation.
+    //
+    // First make messaging reliable.
+    // Add rate limiting back afterward.
+    // ==========================================================
+
+    await db.runTransaction(
+      async transaction => {
+
+        const conversation =
+          await transaction.get(
+            conversationRef
+          );
+
+
+        if (conversation.exists) {
+
+          const existingParticipants =
+            Array.isArray(
+              conversation.data().participants
+            )
+              ? conversation.data().participants
+              : [];
+
+
+          const existingConversationId =
+            canonicalConversation(
+              existingParticipants
+            );
+
+
+          if (
+            existingConversationId
+            !== conversationId
+          ) {
+
+            throw new HttpsError(
+              "permission-denied",
+              "Conversation is unavailable."
+            );
+          }
+
+
+          transaction.update(
+            conversationRef,
+            {
+
+              participants,
+
+              lastMessage:
+                messageText || (
+                  type === "attachment"
+                    ? "Attachment"
+                    : type === "postLink"
+                      ? "Shared post"
+                      : "Message"
+                ),
+
+              lastMessageType:
+                type,
+
+              lastSenderId:
+                uid,
+
+              lastMessageAt:
+                FieldValue.serverTimestamp(),
+
+              updatedAt:
+                FieldValue.serverTimestamp()
+            }
+          );
+
+        } else {
+
+          transaction.create(
+            conversationRef,
+            {
+
+              conversationId,
+
+              participants,
+
+              createdAt:
+                FieldValue.serverTimestamp(),
+
+              updatedAt:
+                FieldValue.serverTimestamp(),
+
+              lastMessage:
+                messageText || (
+                  type === "attachment"
+                    ? "Attachment"
+                    : type === "postLink"
+                      ? "Shared post"
+                      : "Message"
+                ),
+
+              lastMessageType:
+                type,
+
+              lastSenderId:
+                uid,
+
+              lastMessageAt:
+                FieldValue.serverTimestamp()
+            }
+          );
+        }
+
+
+        transaction.create(
+          messageRef,
+          message
+        );
+      }
+    );
+
+
+    // ==========================================================
+    // NOTIFICATION
+    //
+    // Notification failure must NOT make message sending fail.
+    // ==========================================================
+
+    if (peer) {
+
+      try {
+
+        await db.doc(
+          `users/${peer}/notifications/${messageRef.id}`
+        ).set({
+
+          type: "message",
+
+          messageId:
+            messageRef.id,
+
+          conversationId,
+
+          senderId:
+            uid,
+
+          title:
+            "New message",
+
+          body:
+            type === "attachment"
+              ? "Sent you a file"
+              : type === "postLink"
+                ? "Shared a post with you"
+                : String(
+                    messageText || "New message"
+                  ).slice(0, 180),
+
+          read:
+            false,
+
+          createdAt:
+            FieldValue.serverTimestamp()
+        });
+
+      } catch (notificationError) {
+
+        /*
+         * A notification problem must not turn a successfully
+         * stored message into "Failed · Retry".
+         */
+        console.error(
+          "MESSAGE_NOTIFICATION_FAILED",
+          {
+            messageId:
+              messageRef.id,
+
+            senderId:
+              uid,
+
+            peer,
+
+            error:
+              notificationError
+          }
+        );
+      }
+    }
+
+
+    // ==========================================================
+    // SUCCESS
+    // ==========================================================
+
+    return {
+
+      ok: true,
+
+      id:
+        messageRef.id,
+
+      messageId:
+        messageRef.id,
+
+      conversationId,
+
+      participants
+    };
+  }
+);
 
 exports.createComment=onCall({region:REGION},async request=>{
   const uid=signedIn(request);const profile=await activeAccount(uid);const input=request.data||{};const postId=text(input.postId,160,true);const postRef=db.doc(`posts/${postId}`);const post=await postRef.get();if(!post.exists)throw new HttpsError('not-found','Post not found.');const channelId=String(post.data().channelId||'');const membership=await db.doc(`memberships/${uid}_${channelId}`).get();const channel=await db.doc(`channels/${channelId}`).get();if(!membership.exists&&channel.data()?.ownerId!==uid)throw new HttpsError('permission-denied','Join the channel before commenting.');
