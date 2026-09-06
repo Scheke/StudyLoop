@@ -56,6 +56,11 @@ service cloud.firestore {
       return getAfter(/databases/$(database)/documents/channels/$(channelId)).data.access == 'Public'
         || getAfter(/databases/$(database)/documents/channels/$(channelId)).data.visibility == 'public';
     }
+    function isPublicChannelRead(channelId) {
+      return exists(/databases/$(database)/documents/channels/$(channelId))
+        && (get(/databases/$(database)/documents/channels/$(channelId)).data.access == 'Public'
+          || get(/databases/$(database)/documents/channels/$(channelId)).data.visibility == 'public');
+    }
     function nextMemberCount(channelId) {
       return ('members' in get(/databases/$(database)/documents/channels/$(channelId)).data)
         ? get(/databases/$(database)/documents/channels/$(channelId)).data.members + 1
@@ -217,7 +222,10 @@ service cloud.firestore {
       // Post queries are scoped to the caller's joined channel IDs. Keep the
       // membership check here as the authorization boundary; UI filtering is
       // not treated as access control.
-      allow read: if admin() || (activeUser() && isChannelMember(resource.data.channelId));
+      allow read: if admin() || (activeUser() && (
+        isPublicChannelRead(resource.data.channelId)
+        || isChannelMember(resource.data.channelId)
+      ));
       allow create: if false;
       allow update: if activeUser() && resource.data.authorId == request.auth.uid
         && request.resource.data.keys().hasOnly(['id','initials','authorId','author','authorPhotoURL','ago','course','channelId','icon','text','comments','imageURL','images','imagePreviews','audioURL','audioDuration','file','files','createdAt'])
@@ -281,7 +289,10 @@ service cloud.firestore {
     match /posts/{postId}/comments/{commentId} {
       allow read: if admin() || (activeUser()
         && exists(/databases/$(database)/documents/posts/$(postId))
-        && isChannelMember(get(/databases/$(database)/documents/posts/$(postId)).data.channelId));
+        && (
+          isPublicChannelRead(get(/databases/$(database)/documents/posts/$(postId)).data.channelId)
+          || isChannelMember(get(/databases/$(database)/documents/posts/$(postId)).data.channelId)
+        ));
       allow create, delete: if false;
       allow update: if false;
     }

@@ -1,5 +1,5 @@
 import './styles.css';
-import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, updateCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, getAssetBlob, ensureConversation, observeAuth, observePosts, getUserProfile, getAccountEntitlement, getDownloadUsage, getStorageUsage, observeStorageUsage, observeVoiceUsage, claimSuccessfulDownload, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, updateCloudChannel, deleteCloudChannel, getChannelMemberCount, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments, observeNotifications, markNotificationsRead, observeChannelNotificationPreferences, setChannelNotifications } from './firebase.js';
+import { signUp, signIn, signOutUser, sendPasswordReset, deactivateUser, report, saveCloudPost, updateCloudPost, deleteCloudPost, uploadAsset, deleteUploadedAsset, getAssetBlob, ensureConversation, observeAuth, observePosts, observeChannelPosts, getUserProfile, getAccountEntitlement, getDownloadUsage, getStorageUsage, observeStorageUsage, observeVoiceUsage, claimSuccessfulDownload, updateUserProfile, setInstallPromptDismissed, observeChannels, createCloudChannel, updateCloudChannel, deleteCloudChannel, getChannelMemberCount, observeUsers, observeMemberships, setMembership, observeSaved, setSavedPost, saveCloudMessage, deleteCloudMessage, updateCloudMessage, observeMessages, observeUserMessages, markMessagesSeen, markMessagePlayed, observeFriendRequests, sendFriendRequest, respondToFriendRequest, observeBlocks, setUserBlocked, saveCloudComment, deleteCloudComment, observeCloudComments, observeNotifications, markNotificationsRead, observeChannelNotificationPreferences, setChannelNotifications } from './firebase.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"></use></svg>`;
@@ -196,6 +196,7 @@ function hydrateVoicePlayers() {
 
 const channels = [];
 const posts = [];
+const selectedChannelPosts = [];
 const people = [];
 const friendRequests = [];
 const discoverPeople = [];
@@ -208,7 +209,7 @@ const commentCounts = new Map();
 let inboxMessages=[];
 
 function syncPostCommentCount(postId, count) {
-  const post=posts.find(item=>String(item.id)===String(postId));
+  const post=posts.find(item=>String(item.id)===String(postId))||selectedChannelPosts.find(item=>String(item.id)===String(postId));
   if(post)post.comments=Math.max(0,Number(count)||0);
 }
 
@@ -773,7 +774,7 @@ function channelDetailPage() {
   if(!channelRaw)return shell(`<div class="card empty"><h3>Channel unavailable</h3><p>This channel may have been removed, or you may no longer have access.</p></div>`,'Channel',false);
   const channel={...channelRaw,name:escapeHtml(channelRaw.name),sub:escapeHtml(channelRaw.sub),access:escapeHtml(channelRaw.access),icon:escapeHtml(channelRaw.icon),cls:escapeHtml(channelRaw.cls)};
   const joined=!state.isGuest&&state.joined.has(state.activeChannel);
-  const channelPosts=posts.filter(post=>(post.channelId===channelRaw.id||post.course===channelRaw.name)&&(channelRaw.access==='Public'||joined)&&(!state.channelMessageSearch||`${post.author||''} ${post.text||''} ${postFiles(post).map(file=>file?.name||'').join(' ')}`.toLowerCase().includes(state.channelMessageSearch.toLowerCase())));
+  const channelPosts=selectedChannelPosts.filter(post=>(post.channelId===channelRaw.id||post.course===channelRaw.name)&&(!state.channelMessageSearch||`${post.author||''} ${post.text||''} ${postFiles(post).map(file=>file?.name||'').join(' ')}`.toLowerCase().includes(state.channelMessageSearch.toLowerCase())));
   const files=channelPosts.flatMap(post=>postFiles(post).map(file=>({post,file})));
   const creator=channelRaw.ownerId===state.userId?{name:state.profileName,photoURL:state.profilePhotoURL,initials:initials(state.profileName)}:people.find(person=>person.id===channelRaw.ownerId);
   const createdDate=channelRaw.createdAt?.toDate?channelRaw.createdAt.toDate().toLocaleDateString([],{year:'numeric',month:'long',day:'numeric'}):'Date unavailable';
@@ -821,7 +822,7 @@ function friendsPage() {
 }
 
 function postDetailPage() {
-  const post=posts.find(p=>p.id===state.activePost)||posts[0];
+  const post=posts.find(p=>p.id===state.activePost)||selectedChannelPosts.find(p=>p.id===state.activePost)||posts[0];
   if(!post)return shell(`<div class="telegram-empty"><h3>Post unavailable</h3><p>This post may have been removed.</p></div>`,'Replies',false);
   const comments=discussionComments[post.id]||[];
   const ids=new Set(comments.map(comment=>comment.id));
@@ -926,6 +927,7 @@ document.addEventListener('click',e=>{
     const protectedPages=new Set(['messages','friends','saved','profile']);
     if(state.isGuest&&protectedPages.has(nav.dataset.nav)){openAuthModal('Sign in to access your personal StudyLoop space.');return;}
     if(state.page==='post-detail'&&nav.dataset.nav!=='post-detail')abandonCommentVoice();
+    if(state.page==='channel-detail'&&nav.dataset.nav!=='channel-detail')disconnectSelectedChannelPosts();
     state.page=nav.dataset.nav;state.chatOpen=false;if(state.page==='messages'&&state.activeChat===0&&chats.length>1)state.activeChat=1;render();return;
   }
   const shareTarget=e.target.closest('[data-share-target]'); if(shareTarget){
@@ -955,15 +957,15 @@ document.addEventListener('click',e=>{
   const savedChat=e.target.closest('[data-saved-chat]'); if(savedChat){if(guestNeedsSignIn('Sign in to access Saved Messages.'))return;state.activeChat=0;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const personChat=e.target.closest('[data-person-chat]'); if(personChat){if(guestNeedsSignIn('Sign in to message classmates.'))return;state.activeChat=+personChat.dataset.personChat+1;state.page='messages';state.chatOpen=true;subscribeActiveMessages();render();return;}
   const profile=e.target.closest('[data-profile]'); if(profile){state.profileUser=+profile.dataset.profile;state.page='user-profile';render();return;}
-  const openPost=e.target.closest('[data-open-post]'); if(openPost){const index=posts.findIndex(item=>String(item.id)===String(openPost.dataset.openPost));if(index<0){notify('This post is no longer available.');return;}state.activePost=posts[index].id;state.page='post-detail';subscribeActiveComments();render();return;}
+  const openPost=e.target.closest('[data-open-post]'); if(openPost){const postId=String(openPost.dataset.openPost);const post=posts.find(item=>String(item.id)===postId)||selectedChannelPosts.find(item=>String(item.id)===postId);if(!post){notify('This post is no longer available.');return;}state.activePost=post.id;state.page='post-detail';subscribeActiveComments();render();return;}
   const forwardMessage=e.target.closest('[data-forward-message]'); if(forwardMessage){document.body.insertAdjacentHTML('beforeend',attachmentForwardModal(forwardMessage.dataset.forwardMessage));return;}
   const forwardPerson=e.target.closest('[data-forward-person]');
   if(forwardPerson){const modal=forwardPerson.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const person=people[+forwardPerson.dataset.forwardPerson];if(source?.file&&person){saveCloudMessage({conversationId:[state.userId,person.id].sort().join('_'),participants:[state.userId,person.id],senderId:state.userId,type:'attachment',text:'Shared a file',file:source.file,...(source.file.type?.startsWith('audio/')?{playedBy:[state.userId]}:{})}).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File sent to ${person.name}`);}).catch(error=>notify(userFacingError(error,'Unable to forward this file.')));}return;}
   const forwardChannel=e.target.closest('[data-forward-channel]');
   if(forwardChannel){const modal=forwardChannel.closest('[data-message-id]');const source=(chats[0]?.messages||[]).find(item=>!Array.isArray(item)&&item.id===modal?.dataset.messageId);const channel=channels[+forwardChannel.dataset.forwardChannel];if(source?.file&&channel&&state.joined.has(+forwardChannel.dataset.forwardChannel)){const id=String(Date.now());const post={id,initials:initials(state.profileName),author:state.profileName,authorId:state.userId,authorPhotoURL:state.profilePhotoURL,ago:'now',course:channel.name,channelId:channel.id,icon:channel.icon,text:'',comments:0,file:source.file};saveCloudPost(post,state.userId).then(()=>{modal.closest('.modal-backdrop')?.remove();notify(`File posted in ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to post this file.')));}return;}
-  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';render();}else{setMembership(state.userId,channel.id,true).then(()=>{state.memberChannelIds.add(String(channel.id));syncJoinedChannels();subscribeJoinedPosts(true);render();notify(`Joined ${channel.name}`);}).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
+  const join=e.target.closest('[data-join]'); if(join){if(guestNeedsSignIn('Sign in to join this channel.'))return;const idx=+join.dataset.join;const channel=channels[idx];if(state.joined.has(idx)){state.activeChannel=idx;state.page='channel-detail';subscribeSelectedChannelPosts(channel);render();}else{setMembership(state.userId,channel.id,true).then(()=>{state.memberChannelIds.add(String(channel.id));syncJoinedChannels();subscribeJoinedPosts(true);state.activeChannel=idx;state.page='channel-detail';subscribeSelectedChannelPosts(channel);render();notify(`Joined ${channel.name}`);}).catch(error=>notify(userFacingError(error,channel.access==='Private'?'This private channel requires an invitation.':'Unable to join this channel.')));}return;}
   const leave=e.target.closest('[data-leave]'); if(leave){if(guestNeedsSignIn('Sign in to manage your channel membership.'))return;const idx=+leave.dataset.leave;const channel=channels[idx];setMembership(state.userId,channel.id,false).then(()=>{syncJoinedChannels();render();notify(`Left ${channel.name}`);}).catch(error=>notify(userFacingError(error,'Unable to leave this channel.')));return;}
-  const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';scrollChannelToLatest=true;render();return;}
+  const openChannel=e.target.closest('[data-open-channel]'); if(openChannel){state.activeChannel=+openChannel.dataset.openChannel;state.channelTab='posts';state.page='channel-detail';scrollChannelToLatest=true;subscribeSelectedChannelPosts(channels[state.activeChannel]);render();return;}
   const deleteComment=e.target.closest('[data-delete-comment]');
   if(deleteComment){const comment=(discussionComments[state.activePost]||[]).find(item=>item.id===deleteComment.dataset.deleteComment);if(comment?.authorId!==state.userId){notify('You can only delete your own comment.');return;}if(confirm('Delete this comment?'))Promise.all([deleteCloudComment(state.activePost,comment.id),deleteUploadedAsset(comment.imageURL).catch(()=>{}),deleteUploadedAsset(comment.audioURL).catch(()=>{})]).then(()=>notify('Comment deleted')).catch(error=>notify(userFacingError(error,'Unable to delete this comment.')));return;}
   const deleteMessage=e.target.closest('[data-delete-message]');
@@ -1125,11 +1127,11 @@ function showOptimisticChatText(text, replyTo) {
   render();
   return id;
 }
-function markOptimisticMessageFailed(id){if(!id)return;const chat=chats[state.activeChat];const message=chat?.messages?.find(item=>item.id===id);if(message){message.pending=false;message.failed=true;render();}}
+function markOptimisticMessageFailed(id,errorCode=''){if(!id)return;const chat=chats[state.activeChat];const message=chat?.messages?.find(item=>item.id===id);if(message){message.pending=false;message.failed=true;message.errorCode=String(errorCode||'');render();}}
 
 document.addEventListener('submit',async e=>{
   if(e.target.id==='auth-form'){e.preventDefault();const data=new FormData(e.target);if(state.authMode==='signup'&&!data.get('terms')){notify('Accept the Terms & Conditions to create your account.');return;}try{const user=state.authMode==='signup'?await signUp(data.get('username'),data.get('email'),data.get('password')):await signIn(data.get('email'),data.get('password'));state.userEmail=user.email;await loadAccountEntitlement(user.uid);state.profileName=state.authMode==='signup'?String(data.get('username')||'').trim():state.profileName;state.isGuest=false;state.isAuthenticated=true;$('.auth-backdrop')?.remove();state.page='home';state.chatOpen=false;notify('Signed in successfully');render();}catch(error){notify(userFacingError(error,'Unable to sign in.'));}}
-  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input?.value.trim()||'';if(!value)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];const conversationId=conversationIdFor();const replyTo=state.replyToMessage?{id:String(state.replyToMessage.id),sender:String(state.replyToMessage.sender).slice(0,80),text:String(state.replyToMessage.text).slice(0,300)}:null;const pendingId=showOptimisticChatText(value,replyTo);try{await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'text',text:value,...(replyTo?{replyTo}:{})});localStorage.removeItem(`studyloop-draft:${state.userId}:${conversationId}`);state.replyToMessage=null;if(input)input.value='';render();}catch(error){markOptimisticMessageFailed(pendingId);notify(userFacingError(error,'Unable to send message.'));}}
+  if(e.target.id==='chat-form'){e.preventDefault();if(guestNeedsSignIn('Sign in to send messages.'))return;const input=$('#message-input');const value=input?.value.trim()||'';if(!value)return;const peer=state.activeChat===0?null:people[state.activeChat-1];const participants=peer?[state.userId,peer.id]:[state.userId];const conversationId=conversationIdFor();const replyTo=state.replyToMessage?{id:String(state.replyToMessage.id),sender:String(state.replyToMessage.sender).slice(0,80),text:String(state.replyToMessage.text).slice(0,300)}:null;const pendingId=showOptimisticChatText(value,replyTo);try{await saveCloudMessage({conversationId,participants,senderId:state.userId,type:'text',text:value,...(replyTo?{replyTo}:{})});localStorage.removeItem(`studyloop-draft:${state.userId}:${conversationId}`);state.replyToMessage=null;if(input)input.value='';render();}catch(error){console.error('StudyLoop text message failed',{errorCode:error?.code||'',errorMessage:error?.message||'',errorDetails:error?.details??null});markOptimisticMessageFailed(pendingId,error?.code);notify(userFacingError(error,'Unable to send message.'));}}
   if(e.target.id==='edit-channel-form'){
     e.preventDefault();
     const channel=channels[state.activeChannel];
@@ -1245,13 +1247,21 @@ document.addEventListener('click',e=>{
   const radio=e.target.closest('[data-visibility]');if(radio){$$('.radio-card').forEach(x=>x.classList.remove('selected'));radio.classList.add('selected');}
 });
 
-let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopCloudNotifications, stopStorageUsage, stopVoiceUsage, stopFriendRequests, stopBlocks, stopChannelNotificationPreferences;
+let stopCloudPosts, stopCloudChannels, stopCloudUsers, stopCloudMemberships, stopCloudSaved, stopActiveMessages, stopUserMessages, stopActiveComments, stopCloudNotifications, stopStorageUsage, stopVoiceUsage, stopFriendRequests, stopBlocks, stopChannelNotificationPreferences, stopSelectedChannelPosts;
 let currentAuthUid='';
 let postRetryTimer,channelRetryTimer,postsSubscriptionKey='',awaitingInitialPostSnapshot=true;
+let selectedChannelSubscriptionId='';
+function disconnectSelectedChannelPosts(clear=true) {
+  stopSelectedChannelPosts?.();
+  stopSelectedChannelPosts=undefined;
+  selectedChannelSubscriptionId='';
+  if(clear)selectedChannelPosts.splice(0);
+}
 function disconnectUserSubscriptions() {
-  for(const stop of [stopCloudPosts,stopCloudChannels,stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopCloudNotifications,stopStorageUsage,stopVoiceUsage,stopFriendRequests,stopBlocks,stopChannelNotificationPreferences])stop?.();
+  for(const stop of [stopCloudPosts,stopCloudChannels,stopCloudUsers,stopCloudMemberships,stopCloudSaved,stopActiveMessages,stopUserMessages,stopActiveComments,stopCloudNotifications,stopStorageUsage,stopVoiceUsage,stopFriendRequests,stopBlocks,stopChannelNotificationPreferences,stopSelectedChannelPosts])stop?.();
   clearTimeout(postRetryTimer);clearTimeout(channelRetryTimer);postRetryTimer=channelRetryTimer=undefined;
-  stopCloudPosts=stopCloudChannels=stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopCloudNotifications=stopStorageUsage=stopVoiceUsage=stopFriendRequests=stopBlocks=stopChannelNotificationPreferences=undefined;
+  stopCloudPosts=stopCloudChannels=stopCloudUsers=stopCloudMemberships=stopCloudSaved=stopActiveMessages=stopUserMessages=stopActiveComments=stopCloudNotifications=stopStorageUsage=stopVoiceUsage=stopFriendRequests=stopBlocks=stopChannelNotificationPreferences=stopSelectedChannelPosts=undefined;
+  selectedChannelSubscriptionId='';selectedChannelPosts.splice(0);
   postsSubscriptionKey='';awaitingInitialPostSnapshot=true;
 }
 function editChannelModal(channel){const access=channel.access||'Public';return `<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="edit-channel-form"><div class="modal-head"><h2>Edit channel</h2><button type="button" class="icon-btn" data-action="close-modal">${icon('x')}</button></div><div class="form-grid"><div class="field"><label>Channel name</label><input name="name" maxlength="80" required value="${escapeHtml(channel.name)}" /></div><div class="field"><label>Description</label><textarea name="description" maxlength="500">${escapeHtml(channel.desc||'')}</textarea></div><div class="field"><label>Course <span class="muted small">(optional)</span></label><input name="course" maxlength="120" value="${escapeHtml(channel.course||'')}" /></div><div class="field"><label>Module <span class="muted small">(optional)</span></label><input name="module" maxlength="120" value="${escapeHtml(channel.sub||'')}" /></div><div class="field"><label>Visibility</label><div class="radio-row"><div class="radio-card ${access==='Public'?'selected':''}" data-visibility="Public"><strong>Public</strong><div class="muted small">Anyone can discover and join.</div></div><div class="radio-card ${access==='Private'?'selected':''}" data-visibility="Private"><strong>Private</strong><div class="muted small">Only invited members can join.</div></div></div></div><div class="field"><label>Channel picture</label><input type="file" name="channelImage" accept="image/jpeg,image/png,image/webp" /><span class="muted small">JPEG, PNG, or WebP up to 10 MB.</span></div></div><div class="modal-actions"><button type="button" class="secondary" data-action="close-modal">Cancel</button><button class="primary">Save changes</button></div></form></div>`;}
@@ -1260,6 +1270,7 @@ window.addEventListener('popstate',event=>{
   const page=event.state?.studyloopPage;
   if(!page)return;
   if(state.page==='post-detail'&&page!=='post-detail')abandonCommentVoice();
+  if(state.page==='channel-detail'&&page!=='channel-detail')disconnectSelectedChannelPosts();
   handlingPopState=true;lastHistoryPage=page;state.page=page;state.chatOpen=false;render();handlingPopState=false;
 });
 window.addEventListener('pagehide',abandonActiveVoiceRecording);
@@ -1325,14 +1336,37 @@ function showAppUpdatePrompt(registration) {
   document.body.insertAdjacentHTML('beforeend',`<aside class="app-update-banner" data-app-update-banner role="status"><div>${logo()}<span><strong>StudyLoop update ready</strong><small>Reload to get the latest fixes and attachment support.</small></span></div><div><button class="secondary" data-app-update="later">Later</button><button class="primary" data-app-update="apply">Update now</button></div></aside>`);
 }
 async function subscribeActiveComments(){stopActiveComments?.();try{stopActiveComments=await observeCloudComments(String(state.activePost),comments=>{const postId=String(state.activePost);discussionComments[postId]=comments.map(normalizeDiscussionComment);syncPostCommentCount(postId,comments.length);if(state.page==='post-detail')render();},error=>console.warn('Unable to load comments',error));}catch(error){console.warn('Unable to subscribe to comments',error);}}
+async function subscribeSelectedChannelPosts(channel) {
+  disconnectSelectedChannelPosts();
+  const channelId=String(channel?.id||'');
+  if(!channelId)return;
+  const visibility=String(channel.access||channel.visibility||'Public').toLowerCase();
+  const isPublic=visibility==='public';
+  const isMember=state.memberChannelIds.has(channelId)||channel.ownerId===state.userId;
+  if(!isPublic&&!isMember){render();return;}
+  selectedChannelSubscriptionId=channelId;
+  try {
+    const stop=await observeChannelPosts(channelId,cloudPosts=>{
+      if(selectedChannelSubscriptionId!==channelId)return;
+      const incoming=cloudPosts.map(post=>({...post,id:String(post.id),ago:post.ago||'just now',comments:(commentCounts.get(String(post.id))??post.comments??0)}));
+      selectedChannelPosts.splice(0,selectedChannelPosts.length,...incoming);
+      resolvePendingDeepLink();
+      if(state.page==='channel-detail'&&String(channels[state.activeChannel]?.id||'')===channelId)render();
+    },error=>console.warn('Unable to load selected channel posts',error));
+    if(selectedChannelSubscriptionId===channelId)stopSelectedChannelPosts=stop;
+    else stop?.();
+  } catch(error) {
+    console.warn('Unable to subscribe to selected channel posts',error);
+  }
+}
 function resolvePendingDeepLink(){
   if(pendingDeepLink.resolved||!state.isAuthenticated||!state.channelsReady)return;
-  const post=pendingDeepLink.postId?posts.find(item=>String(item.id)===pendingDeepLink.postId):null;
+  const post=pendingDeepLink.postId?(posts.find(item=>String(item.id)===pendingDeepLink.postId)||selectedChannelPosts.find(item=>String(item.id)===pendingDeepLink.postId)):null;
   const channelId=pendingDeepLink.channelId||String(post?.channelId||'');
   const channelIndex=channels.findIndex(item=>String(item.id)===channelId);
   if(channelIndex<0&&channelId)return;
   pendingDeepLink.resolved=true;
-  if(channelIndex>=0){state.activeChannel=channelIndex;state.channelTab='posts';state.page='channel-detail';}
+  if(channelIndex>=0){state.activeChannel=channelIndex;state.channelTab='posts';state.page='channel-detail';subscribeSelectedChannelPosts(channels[channelIndex]);}
   if(post){state.activePost=String(post.id);state.page='post-detail';subscribeActiveComments();}
   history.replaceState({studyloopPage:state.page},'',location.pathname);
   render();

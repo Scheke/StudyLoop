@@ -74,7 +74,24 @@ export async function signUp(username, email, password) {
 export async function signIn(email, password) { const s = await getServices(); const user=(await s.authApi.signInWithEmailAndPassword(s.auth, String(email||'').trim().toLowerCase(), password)).user;const profile=await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db,'users',user.uid));if(profile.exists()&&profile.data().deactivated===true){await s.authApi.signOut(s.auth);const error=new Error('Account deactivated');error.code='account/deactivated';throw error;}return user; }
 export async function signOutUser() { const s = await getServices(); return s.authApi.signOut(s.auth); }
 export async function sendPasswordReset(email) { const s = await getServices(); return s.authApi.sendPasswordResetEmail(s.auth, email); }
-async function callBackend(name,data={}) { const s=await getServices();const result=await s.functionsApi.httpsCallable(s.functions,name)(data);return result.data; }
+async function callBackend(name,data={}) {
+  const s=await getServices();
+  try {
+    const result=await s.functionsApi.httpsCallable(s.functions,name)(data);
+    return result.data;
+  } catch (error) {
+    console.error('StudyLoop callable failed',{
+      functionName:name,
+      errorCode:error?.code||'',
+      errorMessage:error?.message||'',
+      errorDetails:error?.details??null,
+      projectId:config.projectId||'',
+      uid:s.auth.currentUser?.uid||null,
+      functionsRegion:'us-central1'
+    });
+    throw error;
+  }
+}
 export async function deactivateUser() { return callBackend('deactivateAccount'); }
 export async function getUserProfile(uid) { const s = await getServices(); const snapshot = await s.firestoreApi.getDoc(s.firestoreApi.doc(s.db, 'users', uid)); return snapshot.exists() ? snapshot.data() : null; }
 export async function setInstallPromptDismissed(uid, dismissed=true) { const s=await getServices();return s.firestoreApi.updateDoc(s.firestoreApi.doc(s.db,'users',uid),{apkPromptDismissed:Boolean(dismissed),updatedAt:s.firestoreApi.serverTimestamp()}); }
@@ -99,6 +116,16 @@ export async function observePosts(channelIds, onChange, onError) {
     return s.firestoreApi.onSnapshot(query,snapshot=>{snapshots.set(index,snapshot.docs.map(doc=>({id:doc.id,...doc.data()})));initialized.add(index);emit();},onError);
   });
   return ()=>stops.forEach(stop=>stop());
+}
+export async function observeChannelPosts(channelId, onChange, onError) {
+  const s=await getServices();
+  const id=String(channelId||'').trim();
+  if(!id){onChange([]);return ()=>{};}
+  const query=s.firestoreApi.query(s.firestoreApi.collection(s.db,'posts'),s.firestoreApi.where('channelId','==',id));
+  return s.firestoreApi.onSnapshot(query,snapshot=>{
+    const timestamp=value=>value?.toMillis?.()??(value?.seconds?value.seconds*1000:0);
+    onChange(snapshot.docs.map(doc=>({id:doc.id,...doc.data()})).sort((a,b)=>timestamp(b.createdAt)-timestamp(a.createdAt)));
+  },onError);
 }
 export async function observeChannels(onChange, onError) { const s = await getServices(); return s.firestoreApi.onSnapshot(s.firestoreApi.collection(s.db, 'channels'), snapshot => onChange(snapshot.docs.map(doc => ({ id:doc.id, ...doc.data() }))), onError); }
 export async function createCloudChannel(channel) { const s = await getServices();const ref=s.firestoreApi.doc(s.firestoreApi.collection(s.db,'channels'));const memberRef=s.firestoreApi.doc(s.db,'memberships',`${channel.ownerId}_${ref.id}`);const batch=s.firestoreApi.writeBatch(s.db);batch.set(ref,{...channel,createdAt:s.firestoreApi.serverTimestamp()});batch.set(memberRef,{uid:channel.ownerId,channelId:ref.id,joinedAt:s.firestoreApi.serverTimestamp()});await batch.commit();return ref.id; }

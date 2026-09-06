@@ -4,6 +4,7 @@ const {initializeApp}=require('firebase-admin/app');
 const {getAuth}=require('firebase-admin/auth');
 const {getFirestore,FieldValue,Timestamp}=require('firebase-admin/firestore');
 const {getStorage}=require('firebase-admin/storage');
+const logger=require('firebase-functions/logger');
 const crypto=require('node:crypto');
 
 initializeApp();
@@ -31,9 +32,17 @@ function signatureMatches(contentType,buffer){const type=String(contentType||'')
 
 exports.ensureConversation=onCall({region:REGION},async request=>{const uid=signedIn(request);await activeAccount(uid);const participants=[...new Set((Array.isArray(request.data?.participants)?request.data.participants:[]).map(String))];if(![1,2].includes(participants.length)||!participants.includes(uid))throw new HttpsError('invalid-argument','Conversation participants are invalid.');const conversationId=canonicalConversation(participants);if(participants.length===2){const peer=participants.find(id=>id!==uid);const [a,b,profile]=await Promise.all([db.doc(`blocks/${uid}_${peer}`).get(),db.doc(`blocks/${peer}_${uid}`).get(),db.doc(`publicProfiles/${peer}`).get()]);if(a.exists||b.exists)throw new HttpsError('permission-denied','Messaging is unavailable for this conversation.');if(!profile.exists)throw new HttpsError('not-found','The recipient is unavailable.');}const ref=db.doc(`conversations/${conversationId}`);await db.runTransaction(async transaction=>{const existing=await transaction.get(ref);if(existing.exists&&canonicalConversation(existing.data().participants||[])!==conversationId)throw new HttpsError('permission-denied','Conversation is unavailable.');if(!existing.exists)transaction.create(ref,{participants,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});});return {conversationId};});
 
-exports.createMessage = onCall(
-  { region: REGION },
-  async request => {
+const createMessageHandler = async request => {
+    const diagnosticInput=request.data||{};
+    logger.info('createMessage.start',{
+      event:'createMessage.start',
+      uid:request.auth?.uid||null,
+      participantCount:Array.isArray(diagnosticInput.participants)?diagnosticInput.participants.length:0,
+      suppliedType:typeof diagnosticInput.type==='string'?diagnosticInput.type:'text',
+      hasConversationId:Boolean(diagnosticInput.conversationId),
+      hasFile:Boolean(diagnosticInput.file),
+      hasPost:Boolean(diagnosticInput.post)
+    });
 
     // ==========================================================
     // AUTH
@@ -635,6 +644,7 @@ exports.createMessage = onCall(
     // SUCCESS
     // ==========================================================
 
+    logger.info('createMessage.success',{event:'createMessage.success',uid,messageId:messageRef.id,conversationId});
     return {
 
       ok: true,
@@ -649,8 +659,22 @@ exports.createMessage = onCall(
 
       participants
     };
+  };
+
+exports.createMessage=onCall({region:REGION},async request=>{
+  try {
+    const result=await createMessageHandler(request);
+    return result;
+  } catch(error) {
+    const uid=request.auth?.uid||null;
+    if(error instanceof HttpsError || String(error?.code||'').startsWith('functions/')){
+      logger.warn('createMessage.reject',{event:'createMessage.reject',stage:'validation_or_transaction',code:error.code||'unknown',uid});
+    } else {
+      logger.error('createMessage.error',{event:'createMessage.error',uid,errorName:error?.name||'Error',errorMessage:error?.message||'Unknown error'});
+    }
+    throw error;
   }
-);
+});
 
 exports.createComment=onCall({region:REGION},async request=>{
   const uid=signedIn(request);const profile=await activeAccount(uid);const input=request.data||{};const postId=text(input.postId,160,true);const postRef=db.doc(`posts/${postId}`);const post=await postRef.get();if(!post.exists)throw new HttpsError('not-found','Post not found.');const channelId=String(post.data().channelId||'');const membership=await db.doc(`memberships/${uid}_${channelId}`).get();const channel=await db.doc(`channels/${channelId}`).get();if(!membership.exists&&channel.data()?.ownerId!==uid)throw new HttpsError('permission-denied','Join the channel before commenting.');

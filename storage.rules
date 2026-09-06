@@ -17,6 +17,15 @@ service firebase.storage {
         || firestore.get(/databases/(default)/documents/channels/$(channelId)).data.ownerId == request.auth.uid
       );
     }
+    function canReadChannelContent(channelId) {
+      return activeRequester()
+        && firestore.exists(/databases/(default)/documents/channels/$(channelId))
+        && (
+          firestore.get(/databases/(default)/documents/channels/$(channelId)).data.access == 'Public'
+          || firestore.get(/databases/(default)/documents/channels/$(channelId)).data.visibility == 'public'
+          || isChannelMember(channelId)
+        );
+    }
     function isConversationParticipant(conversationId) {
       return activeRequester()
         && firestore.exists(/databases/(default)/documents/conversations/$(conversationId))
@@ -115,7 +124,7 @@ service firebase.storage {
     }
 
     match /channels/{channelId}/posts/{postId}/{userId}/{fileName} {
-      allow read: if isChannelMember(channelId);
+      allow read: if canReadChannelContent(channelId);
       allow create: if owns(userId) && isChannelMember(channelId)
         && request.resource.size <= 200 * 1024 * 1024
         && withinQuota(userId)
@@ -126,7 +135,7 @@ service firebase.storage {
     }
 
     match /channels/{channelId}/comments/{postId}/{commentId}/{userId}/{fileName} {
-      allow read: if isChannelMember(channelId);
+      allow read: if canReadChannelContent(channelId);
       allow create: if owns(userId) && isChannelMember(channelId)
         && request.resource.size <= 200 * 1024 * 1024
         && withinQuota(userId)
